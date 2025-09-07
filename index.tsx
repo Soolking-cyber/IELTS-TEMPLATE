@@ -4,7 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {GoogleGenAI, LiveServerMessage, Modality, Session} from '@google/genai';
+import {
+  GoogleGenAI,
+  LiveServerMessage,
+  Modality,
+  Session,
+  Type,
+} from '@google/genai';
 import {LitElement, css, html, PropertyValues} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
@@ -12,11 +18,21 @@ import './visual-3d';
 import {supabase} from './supabase-client';
 import type {Session as SupabaseSession} from '@supabase/supabase-js';
 
+const PART1_INSTRUCTION = `You are an IELTS examiner conducting Part 1 of the speaking test.
+Introduce yourself and the part briefly. Then, ask the candidate around 11-12 questions on 3 different general topics.
+Keep your questions concise. The user is the candidate. Start the conversation now.`;
+
+const PART2_INSTRUCTION = `You are an IELTS examiner. The candidate is about to start Part 2 of the speaking test.
+Do not speak or interrupt them. Only listen.`;
+
+const PART3_INSTRUCTION_TEMPLATE = (topic: string) =>
+  `You are an IELTS examiner conducting Part 3 of the speaking test.
+The topic from Part 2 was about '${topic}'. Engage in a two-way discussion with the candidate based on this topic.
+Ask abstract, opinion-based questions. The discussion should last 4-5 minutes. Start the conversation now.`;
+
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
   @state() isRecording = false;
-  // FIX: The 'isFinal' property on Transcription has been removed from the API.
-  // The local state is updated to reflect this change.
   @state() private transcripts: Array<{
     speaker: string;
     text: string;
@@ -30,6 +46,20 @@ export class GdmLiveAudio extends LitElement {
     Array<{speaker: string; text: string; created_at: string}>
   > = {};
   @state() private sessionFeedback: Record<string, string> = {};
+
+  // IELTS specific state
+  @state() private currentPart: 'part1' | 'part2' | 'part3' | null = null;
+  @state() private part2State:
+    | 'idle'
+    | 'generating'
+    | 'preparing'
+    | 'speaking'
+    | 'finished' = 'idle';
+  @state() private part2CueCard: string | null = null;
+  @state() private part2Topic: string | null = null;
+  @state() private part2TopicForPart3: string | null = null; // Persists topic for Part 3
+  @state() private part2PreparationTimeLeft = 60;
+  private part2TimerInterval: number | null = null;
 
   private client: GoogleGenAI;
   private session: Session;
@@ -55,54 +85,188 @@ export class GdmLiveAudio extends LitElement {
       font-family: 'Google Sans', sans-serif, system-ui;
     }
 
-    .login-container {
+    .landing-page {
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
+      height: 100vh;
+      overflow-y: auto;
       text-align: center;
-      padding: 20px;
-      background-color: #000;
     }
 
-    .login-container h1 {
-      font-size: 2.5rem;
-      margin-bottom: 1rem;
-      font-weight: 300;
-      color: #e0e0e0;
+    .landing-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 5%;
+      width: 90%;
+      position: sticky;
+      top: 0;
+      background-color: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(10px);
+      z-index: 10;
     }
 
-    .login-container p {
-      font-size: 1.1rem;
-      margin-bottom: 2.5rem;
-      color: #aaa;
-      max-width: 500px;
+    .landing-logo {
+      font-size: 1.5rem;
+      font-weight: 500;
+      color: #fff;
     }
 
-    .login-container button {
+    .google-signin-button {
       background-color: #212121;
       color: #e0e0e0;
       border: 1px solid #444;
-      padding: 14px 28px;
-      font-size: 1rem;
+      padding: 10px 20px;
+      font-size: 0.95rem;
       font-weight: 500;
       border-radius: 8px;
       cursor: pointer;
       transition:
         background-color 0.3s,
-        border-color 0.3s,
         transform 0.2s;
       display: flex;
       align-items: center;
       gap: 12px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
     }
 
-    .login-container button:hover {
+    .google-signin-button:hover {
       background-color: #333;
-      border-color: #666;
       transform: translateY(-2px);
+    }
+
+    .hero-section {
+      padding: 10vh 20px;
+    }
+
+    .hero-section h1 {
+      font-size: clamp(2.5rem, 5vw, 4rem);
+      margin-bottom: 1rem;
+      font-weight: 400;
+      color: #e0e0e0;
+      line-height: 1.2;
+    }
+
+    .hero-section p {
+      font-size: clamp(1.1rem, 2vw, 1.3rem);
+      margin: 0 auto 2.5rem auto;
+      color: #aaa;
+      max-width: 700px;
+      line-height: 1.6;
+    }
+
+    .pricing-section {
+      padding: 5vh 20px 10vh 20px;
+    }
+
+    .pricing-section h2 {
+      font-size: clamp(2rem, 4vw, 2.8rem);
+      margin-bottom: 4rem;
+      font-weight: 400;
+      color: #e0e0e0;
+    }
+
+    .pricing-container {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      flex-wrap: wrap;
+    }
+
+    .pricing-card {
+      background-color: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 320px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: transform 0.3s, border-color 0.3s;
+    }
+
+    .pricing-card:hover {
+      transform: translateY(-5px);
+    }
+
+    .pricing-card.highlight {
+      border-color: #4285f4;
+      transform: scale(1.05);
+    }
+
+    .pricing-title-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 1rem;
+    }
+
+    .discount-badge {
+      background-color: #34a853; /* Google Green */
+      color: #fff;
+      padding: 4px 10px;
+      border-radius: 16px; /* Pill shape */
+      font-size: 0.7rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .pricing-title {
+      font-size: 1.5rem;
+      font-weight: 500;
+      margin-bottom: 0; /* Moved to container */
+    }
+
+    .pricing-price {
+      font-size: 3rem;
+      font-weight: bold;
+      margin-bottom: 1.5rem;
+    }
+
+    .pricing-features {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 2rem 0;
+      text-align: center;
+      width: 100%;
+    }
+
+    .pricing-features li {
+      color: #bbb;
+      margin-bottom: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #333;
+    }
+    .pricing-features li:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+
+    .pricing-button {
+      background-color: #4285f4;
+      color: #fff;
+      border: none;
+      padding: 14px 28px;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 8px;
+      cursor: pointer;
+      width: 100%;
+      transition: background-color 0.3s;
+    }
+
+    .pricing-button:hover {
+      background-color: #357ae8;
+    }
+
+    .pricing-card:not(.highlight) .pricing-button {
+      background-color: #333;
+    }
+
+    .pricing-card:not(.highlight) .pricing-button:hover {
+      background-color: #444;
     }
 
     .profile-menu-container {
@@ -177,6 +341,45 @@ export class GdmLiveAudio extends LitElement {
       position: relative;
     }
 
+    .part-selector {
+      display: flex;
+      margin: 10px 10px 0 10px;
+      margin-bottom: -1px; /* Overlap border */
+    }
+
+    .part-button {
+      flex: 1;
+      background-color: #282828;
+      color: #aaa;
+      border: 1px solid #333;
+      border-bottom: none;
+      padding: 12px 20px;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    .part-button:hover:not(.active) {
+      background-color: #3a3a3a;
+      color: #fff;
+    }
+
+    .part-button.active {
+      background-color: #121212;
+      color: white;
+      position: relative;
+      z-index: 1;
+    }
+
+    .part-button:disabled {
+      background-color: #222;
+      color: #666;
+      border-color: #333;
+      cursor: not-allowed;
+    }
+
     .visualizer-container {
       flex: 1;
       min-height: 250px;
@@ -189,8 +392,8 @@ export class GdmLiveAudio extends LitElement {
     .transcripts-container {
       flex: 1;
       background-color: #121212;
-      margin: 10px;
-      border-radius: 12px;
+      margin: 0 10px 10px 10px;
+      border-radius: 0 0 12px 12px;
       padding: 20px;
       overflow-y: auto;
       display: flex;
@@ -242,6 +445,40 @@ export class GdmLiveAudio extends LitElement {
       align-self: flex-start;
       background-color: #3a3a3a;
       border-bottom-left-radius: 4px;
+    }
+
+    .cue-card-container {
+      padding: 15px;
+      margin-bottom: 15px;
+      background-color: #242424;
+      border: 1px solid #444;
+      border-radius: 8px;
+      align-self: center;
+      max-width: 90%;
+      width: 500px;
+    }
+
+    .cue-card h4 {
+      margin-top: 0;
+      color: #c0c0c0;
+      text-align: center;
+      border-bottom: 1px solid #444;
+      padding-bottom: 10px;
+      margin-bottom: 10px;
+    }
+
+    .cue-card p {
+      margin: 0;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+
+    .timer {
+      text-align: center;
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #ef4444;
+      margin-top: 15px;
     }
 
     .history-panel {
@@ -368,17 +605,15 @@ export class GdmLiveAudio extends LitElement {
 
     /* Tablet and Desktop Styles */
     @media (min-width: 768px) {
-      .login-container h1 {
-        font-size: 3.5rem;
-      }
-
-      .login-container p {
-        font-size: 1.2rem;
+      .part-selector {
+        margin: 20px auto 0 auto;
+        width: 90%;
+        max-width: 800px;
       }
 
       /* On desktop, keep the column layout but center the transcript box */
       .transcripts-container {
-        margin: 20px auto; /* Center horizontally, add vertical margin */
+        margin: 0 auto 20px auto; /* Center horizontally, add vertical margin */
         width: 90%;
         max-width: 800px; /* Constrain width for readability */
       }
@@ -403,6 +638,9 @@ export class GdmLiveAudio extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     document.body.removeEventListener('click', this.handleOutsideClick);
+    if (this.part2TimerInterval) {
+      clearInterval(this.part2TimerInterval);
+    }
   }
 
   updated(changedProperties: PropertyValues) {
@@ -461,16 +699,6 @@ export class GdmLiveAudio extends LitElement {
       return;
     }
 
-    // NOTE: For this to work, you must create a 'transcripts' table in your Supabase project.
-    // Table schema:
-    // - id: uuid (Primary Key)
-    // - created_at: timestamptz
-    // - user_id: uuid (Foreign Key to auth.users.id)
-    // - session_id: uuid
-    // - speaker: text
-    // - text: text
-    // You also need to enable Row Level Security (RLS) on this table and
-    // create policies that allow authenticated users to insert and read their own transcripts.
     const transcriptsToSave = this.transcripts.map(({speaker, text}) => ({
       user_id: this.supabaseSession!.user.id,
       session_id: this.currentSessionId!,
@@ -498,16 +726,6 @@ export class GdmLiveAudio extends LitElement {
       return;
     }
 
-    // NOTE: You also need a 'session_feedback' table to store AI-generated feedback.
-    // Table schema:
-    // - id: uuid (Primary Key)
-    // - session_id: uuid (Foreign Key to a session, should be unique)
-    // - user_id: uuid (Foreign Key to auth.users.id)
-    // - feedback: text
-    // - created_at: timestamptz
-    // Enable RLS and create policies for authenticated users to insert/read their own feedback.
-
-    // Ensure we have the latest data before processing
     await this.fetchHistory();
 
     const sessionIdsWithHistory = Object.keys(this.chatHistory);
@@ -549,8 +767,6 @@ export class GdmLiveAudio extends LitElement {
         try {
           const prompt = `Based on the following monologue from a candidate, please act as an IELTS examiner and provide 3-5 sentences of feedback on how they can improve their English speaking skills for the IELTS test. Focus on areas like fluency, lexical resource, grammatical range and accuracy, and pronunciation. Here is the transcript: "${candidateTranscripts}"`;
 
-          // Using 'gemini-2.5-flash' for text-based feedback generation,
-          // as requested. This is separate from the live conversation model.
           const response = await this.client.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
@@ -574,7 +790,7 @@ export class GdmLiveAudio extends LitElement {
       }
 
       if (!feedbackText) {
-        continue; // Could not generate feedback, move to next session
+        continue;
       }
 
       try {
@@ -593,7 +809,6 @@ export class GdmLiveAudio extends LitElement {
           console.log(
             `Successfully generated and saved feedback for session ${sessionId}.`,
           );
-          // Update local state to reflect the change immediately
           this.sessionFeedback = {
             ...this.sessionFeedback,
             [sessionId]: feedbackText,
@@ -650,7 +865,10 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private async initSession() {
+  private async initSession(
+    systemInstruction: string,
+    responseModalities: Modality[] = [Modality.AUDIO],
+  ) {
     if (!this.client) return;
     const model = 'gemini-2.5-flash-preview-native-audio-dialog';
 
@@ -694,8 +912,6 @@ export class GdmLiveAudio extends LitElement {
             if (inputTranscription?.text) {
               const lastTranscript =
                 this.transcripts[this.transcripts.length - 1];
-              // FIX: The 'isFinal' property on Transcription has been removed.
-              // Assuming that we should update the last transcript if it's from the same speaker.
               if (lastTranscript?.speaker === 'Candidate') {
                 lastTranscript.text += inputTranscription.text;
                 this.transcripts = [...this.transcripts];
@@ -713,8 +929,6 @@ export class GdmLiveAudio extends LitElement {
             if (outputTranscription?.text) {
               const lastTranscript =
                 this.transcripts[this.transcripts.length - 1];
-              // FIX: The 'isFinal' property on Transcription has been removed.
-              // Assuming that we should append to the last transcript if it's from the same speaker.
               if (lastTranscript?.speaker === 'Examiner') {
                 lastTranscript.text += outputTranscription.text;
                 this.transcripts = [...this.transcripts];
@@ -744,16 +958,15 @@ export class GdmLiveAudio extends LitElement {
           },
         },
         config: {
-          responseModalities: [Modality.AUDIO],
+          responseModalities: responseModalities,
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
           inputAudioTranscription: {languageCodes: ['en-US'], model: 'chirp'},
           outputAudioTranscription: {languageCodes: ['en-US']},
-          // FIX: The `interruptionConfig` property must be nested under `dialogConfig`.
-          dialogConfig: {
-            interruptionConfig: {threshold: {delaySeconds: 5.0}},
-          },
+          systemInstruction,
+          // Fix: `interruptionConfig` must be nested inside the `config` object.
+          interruptionConfig: {threshold: {delaySeconds: 10.0}},
         },
       });
     } catch (e) {
@@ -761,7 +974,10 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private async startRecording() {
+  private async startRecording(
+    systemInstruction: string,
+    responseModalities: Modality[] = [Modality.AUDIO],
+  ) {
     if (this.isRecording) {
       return;
     }
@@ -769,7 +985,7 @@ export class GdmLiveAudio extends LitElement {
     this.transcripts = [];
     this.currentSessionId = crypto.randomUUID();
 
-    await this.initSession();
+    await this.initSession(systemInstruction, responseModalities);
     if (!this.session) {
       console.error('Could not start new session.');
       return;
@@ -818,6 +1034,16 @@ export class GdmLiveAudio extends LitElement {
     if (!this.isRecording && !this.mediaStream && !this.inputAudioContext)
       return;
 
+    if (this.currentPart === 'part2' && this.part2Topic) {
+      this.part2TopicForPart3 = this.part2Topic;
+      this.part2State = 'finished';
+    }
+
+    if (this.part2TimerInterval) {
+      clearInterval(this.part2TimerInterval);
+      this.part2TimerInterval = null;
+    }
+
     if (this.transcripts.length > 0) {
       await this.saveCurrentSessionHistory();
       this.processMissingFeedback();
@@ -844,12 +1070,97 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private async toggleRecording() {
+  private async stopCurrentSession() {
     if (this.isRecording) {
       await this.stopRecording();
-    } else {
-      await this.startRecording();
     }
+  }
+
+  private async handlePartSelect(part: 'part1' | 'part2' | 'part3') {
+    await this.stopCurrentSession();
+
+    this.currentPart = part;
+    this.transcripts = [];
+    this.part2CueCard = null;
+    this.part2Topic = null;
+    this.part2State = 'idle';
+
+    if (part === 'part1') {
+      await this.startRecording(PART1_INSTRUCTION);
+    } else if (part === 'part2') {
+      this.part2State = 'generating';
+      this.transcripts = [
+        {speaker: 'Examiner', text: 'Generating your Part 2 cue card...'},
+      ];
+      await this.generateCueCard();
+    } else if (part === 'part3') {
+      if (this.part2TopicForPart3) {
+        await this.startRecording(
+          PART3_INSTRUCTION_TEMPLATE(this.part2TopicForPart3),
+        );
+      } else {
+        this.transcripts = [
+          {
+            speaker: 'Examiner',
+            text: 'Please complete Part 2 before starting Part 3.',
+          },
+        ];
+      }
+    }
+  }
+
+  private async generateCueCard() {
+    try {
+      const prompt = `Generate a random IELTS Speaking Part 2 cue card. The cue card should describe a topic and include 3-4 bullet points on what the candidate should talk about. Output a JSON object with two keys: 'topic' (a short string for the general theme, e.g., 'A memorable trip') and 'cueCard' (the full text of the cue card).`;
+
+      const response = await this.client.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              topic: {type: Type.STRING},
+              cueCard: {type: Type.STRING},
+            },
+          },
+        },
+      });
+
+      const jsonString = response.text;
+      const result = JSON.parse(jsonString);
+
+      this.part2Topic = result.topic;
+      this.part2CueCard = result.cueCard;
+      this.transcripts = []; // Clear the "generating" message
+      this.startPart2Preparation();
+    } catch (e) {
+      console.error('Error generating cue card:', e);
+      this.transcripts = [
+        {
+          speaker: 'Examiner',
+          text: 'Sorry, there was an error generating the cue card. Please try again.',
+        },
+      ];
+      this.part2State = 'idle';
+    }
+  }
+
+  private startPart2Preparation() {
+    this.part2State = 'preparing';
+    this.part2PreparationTimeLeft = 60;
+
+    this.part2TimerInterval = window.setInterval(() => {
+      this.part2PreparationTimeLeft -= 1;
+      if (this.part2PreparationTimeLeft <= 0) {
+        clearInterval(this.part2TimerInterval!);
+        this.part2TimerInterval = null;
+        this.part2State = 'speaking';
+        // Automatically start the recording for Part 2, with no audio response
+        this.startRecording(PART2_INSTRUCTION, []);
+      }
+    }, 1000);
   }
 
   private handleOutsideClick = (event: MouseEvent) => {
@@ -891,23 +1202,72 @@ export class GdmLiveAudio extends LitElement {
 
   private renderLogin() {
     return html`
-      <div class="login-container">
-        <h1>Live Audio Experience</h1>
-        <p>
-          Engage in a seamless, real-time conversation. Sign in with your Google
-          account to begin.
-        </p>
-        <button @click=${this.signInWithGoogle}>
-          <svg
-            height="24"
-            width="24"
-            viewBox="0 0 24 24"
-            fill="currentColor">
-            <path
-              d="M21.35,11.1H12.18V13.83H18.69C18.36,17.64 15.19,19.27 12.19,19.27C8.36,19.27 5,16.25 5,12C5,7.9 8.2,4.73 12.19,4.73C15.29,4.73 17.1,6.7 17.1,6.7L19,4.72C19,4.72 16.56,2 12.19,2C6.42,2 2.03,6.8 2.03,12C2.03,17.05 6.16,22 12.19,22C17.6,22 21.5,18.33 21.5,12.91C21.5,11.76 21.35,11.1 21.35,11.1V11.1Z"></path>
-          </svg>
-          Sign in with Google
-        </button>
+      <div class="landing-page">
+        <header class="landing-header">
+          <div class="landing-logo">AI IELTS Examiner</div>
+          <button class="google-signin-button" @click=${this.signInWithGoogle}>
+            <svg
+              height="24"
+              width="24"
+              viewBox="0 0 24 24"
+              fill="currentColor">
+              <path
+                d="M21.35,11.1H12.18V13.83H18.69C18.36,17.64 15.19,19.27 12.19,19.27C8.36,19.27 5,16.25 5,12C5,7.9 8.2,4.73 12.19,4.73C15.29,4.73 17.1,6.7 17.1,6.7L19,4.72C19,4.72 16.56,2 12.19,2C6.42,2 2.03,6.8 2.03,12C2.03,17.05 6.16,22 12.19,22C17.6,22 21.5,18.33 21.5,12.91C21.5,11.76 21.35,11.1 21.35,11.1V11.1Z"></path>
+            </svg>
+            Sign In With Google
+          </button>
+        </header>
+        <main>
+          <section class="hero-section">
+            <h1>Ace Your IELTS Speaking Test</h1>
+            <p>
+              Practice with a realistic AI examiner, get instant feedback, and
+              build your confidence for test day.
+            </p>
+          </section>
+          <section class="pricing-section">
+            <h2>Simple, Credit-Based Pricing</h2>
+            <div class="pricing-container">
+              <div class="pricing-card">
+                <h3 class="pricing-title">Free</h3>
+                <p class="pricing-price">$0</p>
+                <ul class="pricing-features">
+                  <li>10 Credits</li>
+                  <li>10 Minutes of Practice</li>
+                  <li>Basic Feedback</li>
+                </ul>
+                <button
+                  class="pricing-button"
+                  @click=${this.signInWithGoogle}>
+                  Get Started
+                </button>
+              </div>
+              <div class="pricing-card highlight">
+                <h3 class="pricing-title">Starter</h3>
+                <p class="pricing-price">$9</p>
+                <ul class="pricing-features">
+                  <li>100 Credits</li>
+                  <li>100 Minutes of Practice</li>
+                  <li>Detailed Feedback & History</li>
+                </ul>
+                <button class="pricing-button">Choose Plan</button>
+              </div>
+              <div class="pricing-card">
+                <div class="pricing-title-container">
+                  <h3 class="pricing-title">Pro</h3>
+                  <span class="discount-badge">SAVE 25%</span>
+                </div>
+                <p class="pricing-price">$19</p>
+                <ul class="pricing-features">
+                  <li>300 Credits</li>
+                  <li>300 Minutes of Practice</li>
+                  <li>Detailed Feedback & History</li>
+                </ul>
+                <button class="pricing-button">Choose Plan</button>
+              </div>
+            </div>
+          </section>
+        </main>
       </div>
     `;
   }
@@ -962,6 +1322,34 @@ export class GdmLiveAudio extends LitElement {
     `;
   }
 
+  private renderIeltsContent() {
+    return html`
+      ${this.currentPart === 'part2' && this.part2CueCard
+        ? html`
+            <div class="cue-card-container">
+              <div class="cue-card">
+                <h4>IELTS Speaking Part 2</h4>
+                <p .innerHTML=${this.part2CueCard.replace(/\n/g, '<br>')}></p>
+              </div>
+              ${this.part2State === 'preparing'
+                ? html`<div class="timer">
+                    Prepare: ${this.part2PreparationTimeLeft}s
+                  </div>`
+                : ''}
+            </div>
+          `
+        : ''}
+      ${this.transcripts.map(
+        (t) => html`
+          <div class="transcript-line ${t.speaker.toLowerCase()}">
+            <strong>${t.speaker}</strong>
+            <div>${t.text}</div>
+          </div>
+        `,
+      )}
+    `;
+  }
+
   private renderApp() {
     return html`
       <div class="app-container">
@@ -989,23 +1377,34 @@ export class GdmLiveAudio extends LitElement {
         </div>
 
         ${this.renderHistoryPanel()}
+
         <div class="visualizer-container">
           <gdm-audio-visualizer
             .inputNode=${this.inputNode}
             .outputNode=${this.outputNode}
             ?isRecording=${this.isRecording}
-            @click=${this.toggleRecording}></gdm-audio-visualizer>
+            @click=${this.stopCurrentSession}></gdm-audio-visualizer>
         </div>
-        <div class="transcripts-container">
-          ${this.transcripts.map(
-            (t) => html`
-              <div class="transcript-line ${t.speaker.toLowerCase()}">
-                <strong>${t.speaker}</strong>
-                <div>${t.text}</div>
-              </div>
-            `,
-          )}
+
+        <div class="part-selector">
+          <button
+            class="part-button ${this.currentPart === 'part1' ? 'active' : ''}"
+            @click=${() => this.handlePartSelect('part1')}>
+            Part 1
+          </button>
+          <button
+            class="part-button ${this.currentPart === 'part2' ? 'active' : ''}"
+            @click=${() => this.handlePartSelect('part2')}>
+            Part 2
+          </button>
+          <button
+            class="part-button ${this.currentPart === 'part3' ? 'active' : ''}"
+            @click=${() => this.handlePartSelect('part3')}
+            ?disabled=${!this.part2TopicForPart3}>
+            Part 3
+          </button>
         </div>
+        <div class="transcripts-container">${this.renderIeltsContent()}</div>
       </div>
     `;
   }
