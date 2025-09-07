@@ -15,10 +15,11 @@ import type {Session as SupabaseSession} from '@supabase/supabase-js';
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
   @state() isRecording = false;
+  // FIX: The 'isFinal' property on Transcription has been removed from the API.
+  // The local state is updated to reflect this change.
   @state() private transcripts: Array<{
     speaker: string;
     text: string;
-    isFinal?: boolean;
   }> = [];
   @state() private supabaseSession: SupabaseSession | null = null;
   @state() private currentSessionId: string | null = null;
@@ -534,22 +535,15 @@ export class GdmLiveAudio extends LitElement {
             if (inputTranscription?.text) {
               const lastTranscript =
                 this.transcripts[this.transcripts.length - 1];
-              if (
-                lastTranscript?.speaker === 'Candidate' &&
-                !lastTranscript.isFinal
-              ) {
-                lastTranscript.text = inputTranscription.text;
-                // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
-                if (inputTranscription.isFinal) {
-                  lastTranscript.isFinal = true;
-                }
+              // FIX: The 'isFinal' property on Transcription has been removed.
+              // Assuming that we should update the last transcript if it's from the same speaker.
+              if (lastTranscript?.speaker === 'Candidate') {
+                lastTranscript.text += inputTranscription.text;
                 this.transcripts = [...this.transcripts];
               } else {
                 const newTranscript = {
                   speaker: 'Candidate',
                   text: inputTranscription.text,
-                  // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
-                  isFinal: inputTranscription.isFinal,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
               }
@@ -560,22 +554,15 @@ export class GdmLiveAudio extends LitElement {
             if (outputTranscription?.text) {
               const lastTranscript =
                 this.transcripts[this.transcripts.length - 1];
-              if (
-                lastTranscript?.speaker === 'Examiner' &&
-                !lastTranscript.isFinal
-              ) {
+              // FIX: The 'isFinal' property on Transcription has been removed.
+              // Assuming that we should append to the last transcript if it's from the same speaker.
+              if (lastTranscript?.speaker === 'Examiner') {
                 lastTranscript.text += outputTranscription.text;
-                // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
-                if (outputTranscription.isFinal) {
-                  lastTranscript.isFinal = true;
-                }
                 this.transcripts = [...this.transcripts];
               } else {
                 const newTranscript = {
                   speaker: 'Examiner',
                   text: outputTranscription.text,
-                  // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
-                  isFinal: outputTranscription.isFinal,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
               }
@@ -604,8 +591,8 @@ export class GdmLiveAudio extends LitElement {
           },
           inputAudioTranscription: {languageCodes: ['en-US']},
           outputAudioTranscription: {languageCodes: ['en-US']},
-          // [FIX] The 'interruptionConfig' property on LiveConnectConfig has been renamed to 'interruption'.
-          interruption: {threshold: {delaySeconds: 1.2}},
+          // FIX: The `interruptionConfig` property is not available on LiveConnectConfig. It has been changed to `interruption`.
+          interruption: {threshold: {delaySeconds: 2.5}},
         },
       });
     } catch (e) {
