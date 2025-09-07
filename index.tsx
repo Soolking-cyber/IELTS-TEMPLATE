@@ -47,6 +47,15 @@ export class GdmLiveAudio extends LitElement {
   > = {};
   @state() private sessionFeedback: Record<string, string> = {};
 
+  // View management
+  @state() private currentView: 'app' | 'pricing' = 'app';
+
+  // Credit system state
+  @state() private userCredits: number | null = null; // Now in seconds
+  @state() private isOutOfCreditsModalOpen = false;
+  private creditUsageInterval: number | null = null;
+  private creditUpdateIntervalMs = 10000; // 10 seconds
+
   // IELTS specific state
   @state() private currentPart: 'part1' | 'part2' | 'part3' | null = null;
   @state() private part2State:
@@ -306,7 +315,7 @@ export class GdmLiveAudio extends LitElement {
       background-color: #282828;
       border-radius: 8px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-      width: 180px;
+      width: 200px;
       overflow: hidden;
       display: none;
       flex-direction: column;
@@ -331,6 +340,13 @@ export class GdmLiveAudio extends LitElement {
 
     .dropdown-item:hover {
       background-color: #3a3a3a;
+    }
+
+    .dropdown-item-static {
+      padding: 12px 16px;
+      color: #bbb;
+      font-size: 0.9rem;
+      border-bottom: 1px solid #444;
     }
 
     .app-container {
@@ -603,6 +619,58 @@ export class GdmLiveAudio extends LitElement {
       font-style: italic;
     }
 
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal-content {
+      background-color: #282828;
+      padding: 30px 40px;
+      border-radius: 12px;
+      text-align: center;
+      border: 1px solid #444;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+      max-width: 400px;
+      width: 90%;
+    }
+
+    .modal-content h2 {
+      margin-top: 0;
+      color: #e0e0e0;
+      font-size: 1.5rem;
+    }
+
+    .modal-content p {
+      color: #bbb;
+      margin-bottom: 25px;
+      line-height: 1.6;
+    }
+
+    .modal-button {
+      background-color: #4285f4;
+      color: #fff;
+      border: none;
+      padding: 12px 24px;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    .modal-button:hover {
+      background-color: #357ae8;
+    }
+
     /* Tablet and Desktop Styles */
     @media (min-width: 768px) {
       .part-selector {
@@ -641,6 +709,9 @@ export class GdmLiveAudio extends LitElement {
     if (this.part2TimerInterval) {
       clearInterval(this.part2TimerInterval);
     }
+    if (this.creditUsageInterval) {
+      clearInterval(this.creditUsageInterval);
+    }
   }
 
   updated(changedProperties: PropertyValues) {
@@ -652,12 +723,24 @@ export class GdmLiveAudio extends LitElement {
     }
 
     if (changedProperties.has('supabaseSession')) {
-      if (this.supabaseSession) {
+      const oldSession = changedProperties.get('supabaseSession') as
+        | SupabaseSession
+        | null
+        | undefined;
+      // User just logged in
+      if (this.supabaseSession && !oldSession) {
         if (!this.client) {
           this.initClient();
         }
+        // Chain these to avoid race conditions
+        this.fetchUserProfile().then(() => {
+          this.checkPendingPurchase();
+        });
         this.fetchHistory();
-      } else {
+        this.currentView = 'app';
+      }
+      // User just logged out
+      else if (!this.supabaseSession && oldSession) {
         this.cleanup();
       }
     }
@@ -674,6 +757,12 @@ export class GdmLiveAudio extends LitElement {
     this.chatHistory = {};
     this.sessionFeedback = {};
     this.isHistoryPanelOpen = false;
+    this.userCredits = null;
+    this.currentView = 'app';
+    if (this.creditUsageInterval) {
+      clearInterval(this.creditUsageInterval);
+      this.creditUsageInterval = null;
+    }
   }
 
   private initAudio() {
@@ -965,8 +1054,6 @@ export class GdmLiveAudio extends LitElement {
           inputAudioTranscription: {languageCodes: ['en-US'], model: 'chirp'},
           outputAudioTranscription: {languageCodes: ['en-US']},
           systemInstruction,
-          // Fix: `interruptionConfig` must be nested inside the `config` object.
-          interruptionConfig: {threshold: {delaySeconds: 10.0}},
         },
       });
     } catch (e) {
@@ -978,6 +1065,10 @@ export class GdmLiveAudio extends LitElement {
     systemInstruction: string,
     responseModalities: Modality[] = [Modality.AUDIO],
   ) {
+    if (this.userCredits !== null && this.userCredits <= 0) {
+      this.isOutOfCreditsModalOpen = true;
+      return;
+    }
     if (this.isRecording) {
       return;
     }
@@ -1024,6 +1115,10 @@ export class GdmLiveAudio extends LitElement {
       this.scriptProcessorNode.connect(this.inputAudioContext.destination);
 
       this.isRecording = true;
+      this.creditUsageInterval = window.setInterval(
+        () => this.deductCredits(),
+        this.creditUpdateIntervalMs,
+      );
     } catch (err) {
       console.error('Error starting recording:', err);
       this.stopRecording();
@@ -1042,6 +1137,11 @@ export class GdmLiveAudio extends LitElement {
     if (this.part2TimerInterval) {
       clearInterval(this.part2TimerInterval);
       this.part2TimerInterval = null;
+    }
+
+    if (this.creditUsageInterval) {
+      clearInterval(this.creditUsageInterval);
+      this.creditUsageInterval = null;
     }
 
     if (this.transcripts.length > 0) {
@@ -1078,6 +1178,11 @@ export class GdmLiveAudio extends LitElement {
 
   private async handlePartSelect(part: 'part1' | 'part2' | 'part3') {
     await this.stopCurrentSession();
+
+    if (this.userCredits !== null && this.userCredits <= 0) {
+      this.isOutOfCreditsModalOpen = true;
+      return;
+    }
 
     this.currentPart = part;
     this.transcripts = [];
@@ -1200,6 +1305,151 @@ export class GdmLiveAudio extends LitElement {
     await supabase.auth.signOut();
   }
 
+  private async fetchUserProfile() {
+    if (!this.supabaseSession) return;
+
+    const {data, error} = await supabase
+      .from('profiles')
+      .select('credits')
+      .eq('id', this.supabaseSession.user.id)
+      .single();
+
+    if (error) {
+      console.error('Error fetching user profile:', error.message);
+    } else if (data) {
+      this.userCredits = data.credits;
+    }
+  }
+
+  private async deductCredits() {
+    if (!this.isRecording || this.userCredits === null) return;
+
+    const secondsToDeduct = this.creditUpdateIntervalMs / 1000;
+
+    const {data, error} = await supabase.rpc('deduct_credits', {
+      seconds_to_deduct: secondsToDeduct,
+    });
+
+    if (error) {
+      console.error('Error deducting credits:', error);
+      // Optional: Stop the session if deduction fails to prevent misuse.
+      // await this.stopCurrentSession();
+      return;
+    }
+
+    this.userCredits = data;
+
+    if (this.userCredits <= 0) {
+      await this.stopCurrentSession();
+      this.isOutOfCreditsModalOpen = true;
+    }
+  }
+
+  private async handlePurchase(minutes: number, planName: string) {
+    if (!this.supabaseSession) {
+      localStorage.setItem(
+        'pending_purchase',
+        JSON.stringify({minutes, planName}),
+      );
+      await this.signInWithGoogle();
+      return;
+    }
+
+    const seconds_to_add = minutes * 60;
+
+    const {data: newTotal, error} = await supabase.rpc('add_credits', {
+      seconds_to_add,
+    });
+
+    if (error) {
+      console.error('Error processing purchase:', error);
+      alert('There was an error processing your purchase. Please try again.');
+      return;
+    }
+
+    this.userCredits = newTotal;
+
+    alert(
+      `Thank you for purchasing the ${planName} plan! ${minutes} minutes of credit have been added. Your new balance is ${Math.floor(
+        newTotal / 60,
+      )} minutes.`,
+    );
+
+    if (this.currentView === 'pricing') {
+      this.currentView = 'app';
+    }
+  }
+
+  private async checkPendingPurchase() {
+    const pendingPurchaseJSON = localStorage.getItem('pending_purchase');
+    if (pendingPurchaseJSON) {
+      localStorage.removeItem('pending_purchase');
+      try {
+        const {minutes, planName} = JSON.parse(pendingPurchaseJSON);
+        await this.handlePurchase(minutes, planName);
+      } catch (e) {
+        console.error('Error processing pending purchase:', e);
+      }
+    }
+  }
+
+  private redirectToPricing() {
+    this.isOutOfCreditsModalOpen = false;
+    this.currentView = 'pricing';
+  }
+
+  private renderOutOfCreditsModal() {
+    return html`
+      <div class="modal-overlay">
+        <div class="modal-content">
+          <h2>Out of Credits</h2>
+          <p>
+            You have run out of practice credits. Please upgrade your plan to
+            continue.
+          </p>
+          <button class="modal-button" @click=${this.redirectToPricing}>
+            View Pricing
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderPricingCard(
+    title: string,
+    price: string,
+    features: string[],
+    minutes: number,
+    highlight: boolean,
+    discount?: string,
+  ) {
+    const isFree = minutes === 0;
+    return html`
+      <div class="pricing-card ${highlight ? 'highlight' : ''}">
+        ${discount
+          ? html`
+              <div class="pricing-title-container">
+                <h3 class="pricing-title">${title}</h3>
+                <span class="discount-badge">${discount}</span>
+              </div>
+            `
+          : html` <h3 class="pricing-title">${title}</h3> `}
+        <p class="pricing-price">${price}</p>
+        <ul class="pricing-features">
+          ${features.map((f) => html`<li>${f}</li>`)}
+        </ul>
+        <button
+          class="pricing-button"
+          @click=${() =>
+            isFree
+              ? this.signInWithGoogle()
+              : this.handlePurchase(minutes, title)}>
+          ${isFree ? 'Get Started' : 'Choose Plan'}
+        </button>
+      </div>
+    `;
+  }
+
   private renderLogin() {
     return html`
       <div class="landing-page">
@@ -1228,43 +1478,81 @@ export class GdmLiveAudio extends LitElement {
           <section class="pricing-section">
             <h2>Simple, Credit-Based Pricing</h2>
             <div class="pricing-container">
-              <div class="pricing-card">
-                <h3 class="pricing-title">Free</h3>
-                <p class="pricing-price">$0</p>
-                <ul class="pricing-features">
-                  <li>10 Credits</li>
-                  <li>10 Minutes of Practice</li>
-                  <li>Basic Feedback</li>
-                </ul>
-                <button
-                  class="pricing-button"
-                  @click=${this.signInWithGoogle}>
-                  Get Started
-                </button>
-              </div>
-              <div class="pricing-card highlight">
-                <h3 class="pricing-title">Starter</h3>
-                <p class="pricing-price">$9</p>
-                <ul class="pricing-features">
-                  <li>100 Credits</li>
-                  <li>100 Minutes of Practice</li>
-                  <li>Detailed Feedback & History</li>
-                </ul>
-                <button class="pricing-button">Choose Plan</button>
-              </div>
-              <div class="pricing-card">
-                <div class="pricing-title-container">
-                  <h3 class="pricing-title">Pro</h3>
-                  <span class="discount-badge">SAVE 25%</span>
-                </div>
-                <p class="pricing-price">$19</p>
-                <ul class="pricing-features">
-                  <li>300 Credits</li>
-                  <li>300 Minutes of Practice</li>
-                  <li>Detailed Feedback & History</li>
-                </ul>
-                <button class="pricing-button">Choose Plan</button>
-              </div>
+              ${this.renderPricingCard(
+                'Free',
+                '$0',
+                ['5 Minutes of Practice', 'Standard AI Examiner', 'Basic Feedback'],
+                0,
+                false,
+              )}
+              ${this.renderPricingCard(
+                'Starter',
+                '$9',
+                [
+                  '100 Minutes of Practice',
+                  'Advanced AI Examiner',
+                  'Detailed Feedback & History',
+                ],
+                100,
+                false,
+              )}
+              ${this.renderPricingCard(
+                'Pro',
+                '$19',
+                [
+                  '300 Minutes of Practice',
+                  'Advanced AI Examiner',
+                  'Detailed Feedback & History',
+                ],
+                300,
+                true,
+                'SAVE 30%',
+              )}
+            </div>
+          </section>
+        </main>
+      </div>
+    `;
+  }
+
+  private renderPricingPage() {
+    return html`
+      <div class="landing-page">
+        <header class="landing-header">
+          <div class="landing-logo">AI IELTS Examiner</div>
+          <button
+            class="google-signin-button"
+            @click=${() => (this.currentView = 'app')}>
+            Back to Practice
+          </button>
+        </header>
+        <main>
+          <section class="pricing-section" style="padding-top: 5vh;">
+            <h2>Upgrade Your Plan</h2>
+            <div class="pricing-container">
+              ${this.renderPricingCard(
+                'Starter',
+                '$9',
+                [
+                  '100 Minutes of Practice',
+                  'Advanced AI Examiner',
+                  'Detailed Feedback & History',
+                ],
+                100,
+                false,
+              )}
+              ${this.renderPricingCard(
+                'Pro',
+                '$19',
+                [
+                  '300 Minutes of Practice',
+                  'Advanced AI Examiner',
+                  'Detailed Feedback & History',
+                ],
+                300,
+                true,
+                'SAVE 30%',
+              )}
             </div>
           </section>
         </main>
@@ -1353,6 +1641,7 @@ export class GdmLiveAudio extends LitElement {
   private renderApp() {
     return html`
       <div class="app-container">
+        ${this.isOutOfCreditsModalOpen ? this.renderOutOfCreditsModal() : ''}
         <div class="profile-menu-container">
           <button
             class="profile-button"
@@ -1369,6 +1658,12 @@ export class GdmLiveAudio extends LitElement {
             </svg>
           </button>
           <div class="profile-dropdown ${this.isProfileMenuOpen ? 'open' : ''}">
+            <div class="dropdown-item-static">
+              Time Left:
+              ${this.userCredits !== null
+                ? `${Math.floor(this.userCredits / 60)} min`
+                : '...'}
+            </div>
             <button class="dropdown-item" @click=${this.openHistoryPanel}>
               History
             </button>
@@ -1382,25 +1677,25 @@ export class GdmLiveAudio extends LitElement {
           <gdm-audio-visualizer
             .inputNode=${this.inputNode}
             .outputNode=${this.outputNode}
-            ?isRecording=${this.isRecording}
-            @click=${this.stopCurrentSession}></gdm-audio-visualizer>
+            .isRecording=${this.isRecording}></gdm-audio-visualizer>
         </div>
-
         <div class="part-selector">
           <button
             class="part-button ${this.currentPart === 'part1' ? 'active' : ''}"
+            ?disabled=${this.isRecording && this.currentPart !== 'part1'}
             @click=${() => this.handlePartSelect('part1')}>
             Part 1
           </button>
           <button
             class="part-button ${this.currentPart === 'part2' ? 'active' : ''}"
+            ?disabled=${this.isRecording && this.currentPart !== 'part2'}
             @click=${() => this.handlePartSelect('part2')}>
             Part 2
           </button>
           <button
             class="part-button ${this.currentPart === 'part3' ? 'active' : ''}"
-            @click=${() => this.handlePartSelect('part3')}
-            ?disabled=${!this.part2TopicForPart3}>
+            ?disabled=${this.isRecording && this.currentPart !== 'part3'}
+            @click=${() => this.handlePartSelect('part3')}>
             Part 3
           </button>
         </div>
@@ -1410,6 +1705,12 @@ export class GdmLiveAudio extends LitElement {
   }
 
   render() {
-    return this.supabaseSession ? this.renderApp() : this.renderLogin();
+    if (!this.supabaseSession) {
+      return this.renderLogin();
+    }
+    if (this.currentView === 'pricing') {
+      return this.renderPricingPage();
+    }
+    return this.renderApp();
   }
 }
