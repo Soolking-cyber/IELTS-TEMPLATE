@@ -427,8 +427,6 @@ export class GdmLiveAudio extends LitElement {
     });
 
     this.outputNode.connect(this.outputAudioContext.destination);
-
-    this.initSession();
   }
 
   private async saveCurrentSessionHistory() {
@@ -589,10 +587,11 @@ export class GdmLiveAudio extends LitElement {
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
-          inputAudioTranscription: {languageCodes: ['en-US']},
+          inputAudioTranscription: {languageCodes: ['en-US'], model: 'chirp'},
           outputAudioTranscription: {languageCodes: ['en-US']},
-          // FIX: The `interruptionConfig` property is not available on LiveConnectConfig. It has been changed to `interruption`.
-          interruption: {threshold: {delaySeconds: 2.5}},
+          // FIX: The `interruptionConfig` property was previously nested inside a `dialogConfig` object, which caused a type error.
+          // It is now a direct property of the `config` object to align with the type definitions.
+          interruptionConfig: {threshold: {delaySeconds: 5.0}},
         },
       });
     } catch (e) {
@@ -607,6 +606,13 @@ export class GdmLiveAudio extends LitElement {
 
     this.transcripts = [];
     this.currentSessionId = crypto.randomUUID();
+
+    await this.initSession();
+    if (!this.session) {
+      console.error('Could not start new session.');
+      return;
+    }
+
     this.inputAudioContext.resume();
 
     try {
@@ -620,7 +626,7 @@ export class GdmLiveAudio extends LitElement {
       );
       this.sourceNode.connect(this.inputNode);
 
-      const bufferSize = 256;
+      const bufferSize = 4096;
       this.scriptProcessorNode = this.inputAudioContext.createScriptProcessor(
         bufferSize,
         1,
@@ -654,6 +660,11 @@ export class GdmLiveAudio extends LitElement {
 
     this.isRecording = false;
 
+    if (this.session) {
+      this.session.close();
+      this.session = null;
+    }
+
     if (this.scriptProcessorNode && this.sourceNode && this.inputAudioContext) {
       this.scriptProcessorNode.disconnect();
       this.sourceNode.disconnect();
@@ -668,11 +679,11 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private toggleRecording() {
+  private async toggleRecording() {
     if (this.isRecording) {
       this.stopRecording();
     } else {
-      this.startRecording();
+      await this.startRecording();
     }
   }
 
