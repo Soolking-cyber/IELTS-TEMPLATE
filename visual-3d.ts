@@ -97,7 +97,7 @@ export class GdmAudioVisualizer extends LitElement {
     const outputAvg = outputSum / this.outputAnalyser.data.length || 0;
 
     const overallAvg = (inputAvg + outputAvg) / 2;
-    const baseRadius = 160;
+    const baseRadius = 128;
     const pulse = (overallAvg / 255) * 100; // Scale the pulse effect
     const radius = Math.min(baseRadius + pulse, WIDTH / 2 - 2); // Prevent overflow
 

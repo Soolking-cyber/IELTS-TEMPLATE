@@ -29,6 +29,7 @@ export class GdmLiveAudio extends LitElement {
     string,
     Array<{speaker: string; text: string; created_at: string}>
   > = {};
+  @state() private sessionFeedback: Record<string, string> = {};
 
   private client: GoogleGenAI;
   private session: Session;
@@ -344,6 +345,27 @@ export class GdmLiveAudio extends LitElement {
       line-height: 1.4;
     }
 
+    .feedback-section {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #444;
+    }
+
+    .feedback-section h4 {
+      margin: 0 0 8px 0;
+      color: #c0c0c0;
+      font-size: 0.9rem;
+      font-weight: bold;
+    }
+
+    .feedback-section p {
+      margin: 0;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      color: #e0e0e0;
+      font-style: italic;
+    }
+
     /* Tablet and Desktop Styles */
     @media (min-width: 768px) {
       .login-container h1 {
@@ -412,6 +434,7 @@ export class GdmLiveAudio extends LitElement {
     this.session = null;
     this.transcripts = [];
     this.chatHistory = {};
+    this.sessionFeedback = {};
     this.isHistoryPanelOpen = false;
   }
 
@@ -455,10 +478,76 @@ export class GdmLiveAudio extends LitElement {
       text,
     }));
 
-    const {error} = await supabase.from('transcripts').insert(transcriptsToSave);
+    const {data, error} = await supabase
+      .from('transcripts')
+      .insert(transcriptsToSave)
+      .select('session_id, speaker, text, created_at');
 
     if (error) {
       console.error('Error saving session history:', error.message);
+    } else if (data) {
+      this.chatHistory = {
+        ...this.chatHistory,
+        [this.currentSessionId!]: data,
+      };
+    }
+  }
+
+  private async generateAndSaveFeedback() {
+    if (
+      !this.client ||
+      !this.supabaseSession ||
+      !this.currentSessionId ||
+      this.transcripts.length === 0
+    ) {
+      return;
+    }
+
+    // NOTE: You also need a 'session_feedback' table to store AI-generated feedback.
+    // Table schema:
+    // - id: uuid (Primary Key)
+    // - session_id: uuid (Foreign Key to a session, should be unique)
+    // - user_id: uuid (Foreign Key to auth.users.id)
+    // - feedback: text
+    // - created_at: timestamptz
+    // Enable RLS and create policies for authenticated users to insert/read their own feedback.
+
+    const candidateTranscripts = this.transcripts
+      .filter((t) => t.speaker === 'Candidate')
+      .map((t) => t.text)
+      .join(' ');
+
+    if (!candidateTranscripts.trim()) {
+      console.log('No candidate speech to analyze.');
+      return;
+    }
+
+    try {
+      const prompt = `Based on the following monologue from a candidate, please act as an IELTS examiner and provide 3-5 sentences of feedback on how they can improve their English speaking skills for the IELTS test. Focus on areas like fluency, lexical resource, grammatical range and accuracy, and pronunciation. Here is the transcript: "${candidateTranscripts}"`;
+
+      const response = await this.client.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+      });
+
+      const feedbackText = response.text;
+
+      const {error} = await supabase.from('session_feedback').insert({
+        session_id: this.currentSessionId,
+        user_id: this.supabaseSession.user.id,
+        feedback: feedbackText,
+      });
+
+      if (error) {
+        console.error('Error saving feedback:', error.message);
+      } else {
+        this.sessionFeedback = {
+          ...this.sessionFeedback,
+          [this.currentSessionId!]: feedbackText,
+        };
+      }
+    } catch (e) {
+      console.error('Error generating feedback:', e);
     }
   }
 
@@ -486,6 +575,21 @@ export class GdmLiveAudio extends LitElement {
         return acc;
       }, {});
       this.chatHistory = groupedHistory;
+    }
+
+    const {data: feedbackData, error: feedbackError} = await supabase
+      .from('session_feedback')
+      .select('session_id, feedback')
+      .eq('user_id', this.supabaseSession.user.id);
+
+    if (feedbackError) {
+      console.error('Error fetching feedback:', feedbackError.message);
+    } else if (feedbackData) {
+      const feedbackMap = feedbackData.reduce((acc, item) => {
+        acc[item.session_id] = item.feedback;
+        return acc;
+      }, {});
+      this.sessionFeedback = feedbackMap;
     }
   }
 
@@ -589,8 +693,9 @@ export class GdmLiveAudio extends LitElement {
           },
           inputAudioTranscription: {languageCodes: ['en-US'], model: 'chirp'},
           outputAudioTranscription: {languageCodes: ['en-US']},
-          // FIX: The `interruptionConfig` property was previously nested inside a `dialogConfig` object, which caused a type error.
-          // It is now a direct property of the `config` object to align with the type definitions.
+          // FIX: The `dialogConfig` property must be nested inside a `dialogConfig` object.
+          // This has been updated to place `interruptionConfig` directly under `config`
+          // as `dialogConfig` is not a valid property of `LiveConnectConfig`.
           interruptionConfig: {threshold: {delaySeconds: 5.0}},
         },
       });
@@ -656,7 +761,10 @@ export class GdmLiveAudio extends LitElement {
     if (!this.isRecording && !this.mediaStream && !this.inputAudioContext)
       return;
 
-    this.saveCurrentSessionHistory();
+    if (this.transcripts.length > 0) {
+      this.saveCurrentSessionHistory();
+      this.generateAndSaveFeedback();
+    }
 
     this.isRecording = false;
 
@@ -781,6 +889,14 @@ export class GdmLiveAudio extends LitElement {
                         </div>
                       `,
                     )}
+                    ${this.sessionFeedback[sessionId]
+                      ? html`
+                          <div class="feedback-section">
+                            <h4>Feedback</h4>
+                            <p>${this.sessionFeedback[sessionId]}</p>
+                          </div>
+                        `
+                      : ''}
                   </div>
                 `,
               )}
