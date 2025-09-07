@@ -530,9 +530,9 @@ export class GdmLiveAudio extends LitElement {
                 lastTranscript?.speaker === 'Candidate' &&
                 !lastTranscript.isFinal
               ) {
-                lastTranscript.text += inputTranscription.text;
-                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
-                if (inputTranscription.done) {
+                lastTranscript.text = inputTranscription.text;
+// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
+                if (!inputTranscription.isPartial) {
                   lastTranscript.isFinal = true;
                   this.saveTranscript('Candidate', lastTranscript.text);
                 }
@@ -541,12 +541,12 @@ export class GdmLiveAudio extends LitElement {
                 const newTranscript = {
                   speaker: 'Candidate',
                   text: inputTranscription.text,
-                  // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
-                  isFinal: inputTranscription.done,
+// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
+                  isFinal: !inputTranscription.isPartial,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
-                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
-                if (inputTranscription.done) {
+// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
+                if (!inputTranscription.isPartial) {
                   this.saveTranscript('Candidate', newTranscript.text);
                 }
               }
@@ -562,8 +562,8 @@ export class GdmLiveAudio extends LitElement {
                 !lastTranscript.isFinal
               ) {
                 lastTranscript.text += outputTranscription.text;
-                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
-                if (outputTranscription.done) {
+// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
+                if (!outputTranscription.isPartial) {
                   lastTranscript.isFinal = true;
                   this.saveTranscript('Examiner', lastTranscript.text);
                 }
@@ -572,12 +572,12 @@ export class GdmLiveAudio extends LitElement {
                 const newTranscript = {
                   speaker: 'Examiner',
                   text: outputTranscription.text,
-                  // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
-                  isFinal: outputTranscription.done,
+// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
+                  isFinal: !outputTranscription.isPartial,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
-                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
-                if (outputTranscription.done) {
+// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
+                if (!outputTranscription.isPartial) {
                   this.saveTranscript('Examiner', newTranscript.text);
                 }
               }
@@ -604,11 +604,11 @@ export class GdmLiveAudio extends LitElement {
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
-          // FIX: 'interruptionConfig' does not exist in type 'LiveConnectConfig'. Use 'interruption' instead.
-          interruption: {threshold: {delaySeconds: 1.0}},
           inputAudioTranscription: {languageCode: 'en-US'},
           outputAudioTranscription: {languageCode: 'en-US'},
         },
+// FIX: 'interruption' is not a valid property within 'config'. It should be 'interruptionConfig' at the top level of the connect options.
+        interruptionConfig: {threshold: {delaySeconds: 1.0}},
       });
     } catch (e) {
       console.error(e);
