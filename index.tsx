@@ -493,13 +493,8 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private async generateAndSaveFeedback() {
-    if (
-      !this.client ||
-      !this.supabaseSession ||
-      !this.currentSessionId ||
-      this.transcripts.length === 0
-    ) {
+  private async processMissingFeedback() {
+    if (!this.client || !this.supabaseSession) {
       return;
     }
 
@@ -512,44 +507,104 @@ export class GdmLiveAudio extends LitElement {
     // - created_at: timestamptz
     // Enable RLS and create policies for authenticated users to insert/read their own feedback.
 
-    const candidateTranscripts = this.transcripts
-      .filter((t) => t.speaker === 'Candidate')
-      .map((t) => t.text)
-      .join(' ');
+    // Ensure we have the latest data before processing
+    await this.fetchHistory();
 
-    if (!candidateTranscripts.trim()) {
-      console.log('No candidate speech to analyze.');
+    const sessionIdsWithHistory = Object.keys(this.chatHistory);
+    const sessionIdsWithFeedback = Object.keys(this.sessionFeedback);
+
+    const sessionsToProcess = sessionIdsWithHistory.filter(
+      (id) => !sessionIdsWithFeedback.includes(id),
+    );
+
+    if (sessionsToProcess.length === 0) {
+      console.log('No sessions are missing feedback.');
       return;
     }
 
-    try {
-      const prompt = `Based on the following monologue from a candidate, please act as an IELTS examiner and provide 3-5 sentences of feedback on how they can improve their English speaking skills for the IELTS test. Focus on areas like fluency, lexical resource, grammatical range and accuracy, and pronunciation. Here is the transcript: "${candidateTranscripts}"`;
+    console.log(
+      `Found ${sessionsToProcess.length} sessions to process for feedback.`,
+    );
 
-      // Using 'gemini-2.5-flash' for text-based feedback generation,
-      // as requested. This is separate from the live conversation model.
-      const response = await this.client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
-
-      const feedbackText = response.text;
-
-      const {error} = await supabase.from('session_feedback').insert({
-        session_id: this.currentSessionId,
-        user_id: this.supabaseSession.user.id,
-        feedback: feedbackText,
-      });
-
-      if (error) {
-        console.error('Error saving feedback:', error.message);
-      } else {
-        this.sessionFeedback = {
-          ...this.sessionFeedback,
-          [this.currentSessionId!]: feedbackText,
-        };
+    for (const sessionId of sessionsToProcess) {
+      const sessionTranscripts = this.chatHistory[sessionId];
+      if (!sessionTranscripts || sessionTranscripts.length === 0) {
+        continue;
       }
-    } catch (e) {
-      console.error('Error generating feedback:', e);
+
+      const candidateTranscripts = sessionTranscripts
+        .filter((t) => t.speaker === 'Candidate')
+        .map((t) => t.text)
+        .join(' ');
+
+      if (!candidateTranscripts.trim()) {
+        console.log(`No candidate speech to analyze for session ${sessionId}.`);
+        continue;
+      }
+
+      let feedbackText = '';
+      const maxRetries = 3;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const prompt = `Based on the following monologue from a candidate, please act as an IELTS examiner and provide 3-5 sentences of feedback on how they can improve their English speaking skills for the IELTS test. Focus on areas like fluency, lexical resource, grammatical range and accuracy, and pronunciation. Here is the transcript: "${candidateTranscripts}"`;
+
+          // Using 'gemini-2.5-flash' for text-based feedback generation,
+          // as requested. This is separate from the live conversation model.
+          const response = await this.client.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+          });
+
+          feedbackText = response.text;
+          break; // Success
+        } catch (e) {
+          console.error(
+            `Attempt ${attempt} failed to generate feedback for session ${sessionId}:`,
+            e,
+          );
+          if (attempt === maxRetries) {
+            console.error(`All attempts failed for session ${sessionId}.`);
+          } else {
+            const delay = Math.pow(2, attempt - 1) * 1000;
+            console.log(`Retrying in ${delay}ms...`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+        }
+      }
+
+      if (!feedbackText) {
+        continue; // Could not generate feedback, move to next session
+      }
+
+      try {
+        const {error} = await supabase.from('session_feedback').insert({
+          session_id: sessionId,
+          user_id: this.supabaseSession.user.id,
+          feedback: feedbackText,
+        });
+
+        if (error) {
+          console.error(
+            `Error saving feedback for session ${sessionId}:`,
+            error.message,
+          );
+        } else {
+          console.log(
+            `Successfully generated and saved feedback for session ${sessionId}.`,
+          );
+          // Update local state to reflect the change immediately
+          this.sessionFeedback = {
+            ...this.sessionFeedback,
+            [sessionId]: feedbackText,
+          };
+        }
+      } catch (e) {
+        console.error(
+          `Error saving feedback to DB for session ${sessionId}:`,
+          e,
+        );
+      }
     }
   }
 
@@ -695,7 +750,7 @@ export class GdmLiveAudio extends LitElement {
           },
           inputAudioTranscription: {languageCodes: ['en-US'], model: 'chirp'},
           outputAudioTranscription: {languageCodes: ['en-US']},
-          // FIX: The `interruptionConfig` property must be nested inside a `dialogConfig` object.
+          // FIX: The `interruptionConfig` property must be nested under `dialogConfig`.
           dialogConfig: {
             interruptionConfig: {threshold: {delaySeconds: 5.0}},
           },
@@ -759,13 +814,13 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private stopRecording() {
+  private async stopRecording() {
     if (!this.isRecording && !this.mediaStream && !this.inputAudioContext)
       return;
 
     if (this.transcripts.length > 0) {
-      this.saveCurrentSessionHistory();
-      this.generateAndSaveFeedback();
+      await this.saveCurrentSessionHistory();
+      this.processMissingFeedback();
     }
 
     this.isRecording = false;
@@ -791,7 +846,7 @@ export class GdmLiveAudio extends LitElement {
 
   private async toggleRecording() {
     if (this.isRecording) {
-      this.stopRecording();
+      await this.stopRecording();
     } else {
       await this.startRecording();
     }
