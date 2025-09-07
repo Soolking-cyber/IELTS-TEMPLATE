@@ -525,6 +525,8 @@ export class GdmLiveAudio extends LitElement {
     try {
       const prompt = `Based on the following monologue from a candidate, please act as an IELTS examiner and provide 3-5 sentences of feedback on how they can improve their English speaking skills for the IELTS test. Focus on areas like fluency, lexical resource, grammatical range and accuracy, and pronunciation. Here is the transcript: "${candidateTranscripts}"`;
 
+      // Using 'gemini-2.5-flash' for text-based feedback generation,
+      // as requested. This is separate from the live conversation model.
       const response = await this.client.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt,
@@ -693,10 +695,10 @@ export class GdmLiveAudio extends LitElement {
           },
           inputAudioTranscription: {languageCodes: ['en-US'], model: 'chirp'},
           outputAudioTranscription: {languageCodes: ['en-US']},
-          // FIX: The `dialogConfig` property must be nested inside a `dialogConfig` object.
-          // This has been updated to place `interruptionConfig` directly under `config`
-          // as `dialogConfig` is not a valid property of `LiveConnectConfig`.
-          interruptionConfig: {threshold: {delaySeconds: 5.0}},
+          // FIX: The `interruptionConfig` property must be nested inside a `dialogConfig` object.
+          dialogConfig: {
+            interruptionConfig: {threshold: {delaySeconds: 5.0}},
+          },
         },
       });
     } catch (e) {
