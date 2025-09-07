@@ -1,4 +1,4 @@
-/* tslint:disable */
+/* tslin:disable */
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -430,8 +430,14 @@ export class GdmLiveAudio extends LitElement {
     this.initSession();
   }
 
-  private async saveTranscript(speaker: string, text: string) {
-    if (!this.supabaseSession || !this.currentSessionId) return;
+  private async saveCurrentSessionHistory() {
+    if (
+      !this.supabaseSession ||
+      !this.currentSessionId ||
+      this.transcripts.length === 0
+    ) {
+      return;
+    }
 
     // NOTE: For this to work, you must create a 'transcripts' table in your Supabase project.
     // Table schema:
@@ -443,15 +449,17 @@ export class GdmLiveAudio extends LitElement {
     // - text: text
     // You also need to enable Row Level Security (RLS) on this table and
     // create policies that allow authenticated users to insert and read their own transcripts.
-    const {error} = await supabase.from('transcripts').insert({
-      user_id: this.supabaseSession.user.id,
-      session_id: this.currentSessionId,
+    const transcriptsToSave = this.transcripts.map(({speaker, text}) => ({
+      user_id: this.supabaseSession!.user.id,
+      session_id: this.currentSessionId!,
       speaker,
       text,
-    });
+    }));
+
+    const {error} = await supabase.from('transcripts').insert(transcriptsToSave);
 
     if (error) {
-      console.error('Error saving transcript:', error.message);
+      console.error('Error saving session history:', error.message);
     }
   }
 
@@ -531,24 +539,19 @@ export class GdmLiveAudio extends LitElement {
                 !lastTranscript.isFinal
               ) {
                 lastTranscript.text = inputTranscription.text;
-// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
-                if (!inputTranscription.isPartial) {
+                // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
+                if (inputTranscription.isFinal) {
                   lastTranscript.isFinal = true;
-                  this.saveTranscript('Candidate', lastTranscript.text);
                 }
                 this.transcripts = [...this.transcripts];
               } else {
                 const newTranscript = {
                   speaker: 'Candidate',
                   text: inputTranscription.text,
-// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
-                  isFinal: !inputTranscription.isPartial,
+                  // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
+                  isFinal: inputTranscription.isFinal,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
-// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
-                if (!inputTranscription.isPartial) {
-                  this.saveTranscript('Candidate', newTranscript.text);
-                }
               }
             }
 
@@ -562,24 +565,19 @@ export class GdmLiveAudio extends LitElement {
                 !lastTranscript.isFinal
               ) {
                 lastTranscript.text += outputTranscription.text;
-// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
-                if (!outputTranscription.isPartial) {
+                // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
+                if (outputTranscription.isFinal) {
                   lastTranscript.isFinal = true;
-                  this.saveTranscript('Examiner', lastTranscript.text);
                 }
                 this.transcripts = [...this.transcripts];
               } else {
                 const newTranscript = {
                   speaker: 'Examiner',
                   text: outputTranscription.text,
-// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
-                  isFinal: !outputTranscription.isPartial,
+                  // [FIX] The 'done' property on Transcription has been renamed to 'isFinal'.
+                  isFinal: outputTranscription.isFinal,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
-// FIX: The 'isFinal' property does not exist on 'Transcription'. Use '!isPartial' instead.
-                if (!outputTranscription.isPartial) {
-                  this.saveTranscript('Examiner', newTranscript.text);
-                }
               }
             }
 
@@ -604,11 +602,11 @@ export class GdmLiveAudio extends LitElement {
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
-          inputAudioTranscription: {languageCode: 'en-US'},
-          outputAudioTranscription: {languageCode: 'en-US'},
+          inputAudioTranscription: {languageCodes: ['en-US']},
+          outputAudioTranscription: {languageCodes: ['en-US']},
+          // [FIX] The 'interruptionConfig' property on LiveConnectConfig has been renamed to 'interruption'.
+          interruption: {threshold: {delaySeconds: 1.2}},
         },
-// FIX: 'interruption' is not a valid property within 'config'. It should be 'interruptionConfig' at the top level of the connect options.
-        interruptionConfig: {threshold: {delaySeconds: 1.0}},
       });
     } catch (e) {
       console.error(e);
@@ -620,6 +618,7 @@ export class GdmLiveAudio extends LitElement {
       return;
     }
 
+    this.transcripts = [];
     this.currentSessionId = crypto.randomUUID();
     this.inputAudioContext.resume();
 
@@ -663,6 +662,8 @@ export class GdmLiveAudio extends LitElement {
   private stopRecording() {
     if (!this.isRecording && !this.mediaStream && !this.inputAudioContext)
       return;
+
+    this.saveCurrentSessionHistory();
 
     this.isRecording = false;
 
