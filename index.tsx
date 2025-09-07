@@ -23,6 +23,7 @@ export class GdmLiveAudio extends LitElement {
   @state() private supabaseSession: SupabaseSession | null = null;
   @state() private currentSessionId: string | null = null;
   @state() private isHistoryPanelOpen = false;
+  @state() private isProfileMenuOpen = false;
   @state() private chatHistory: Record<
     string,
     Array<{speaker: string; text: string; created_at: string}>
@@ -49,6 +50,7 @@ export class GdmLiveAudio extends LitElement {
       background-color: #000;
       overflow: hidden;
       color: white;
+      font-family: 'Google Sans', sans-serif, system-ui;
     }
 
     .login-container {
@@ -59,72 +61,123 @@ export class GdmLiveAudio extends LitElement {
       height: 100%;
       text-align: center;
       padding: 20px;
+      background-color: #000;
     }
 
     .login-container h1 {
-      font-size: 3rem;
+      font-size: 2.5rem;
       margin-bottom: 1rem;
       font-weight: 300;
+      color: #e0e0e0;
     }
 
     .login-container p {
-      font-size: 1.2rem;
-      margin-bottom: 2rem;
-      color: #ccc;
+      font-size: 1.1rem;
+      margin-bottom: 2.5rem;
+      color: #aaa;
+      max-width: 500px;
     }
 
     .login-container button {
-      background-color: #4285f4; /* Google Blue */
-      color: white;
-      border: none;
-      padding: 12px 24px;
+      background-color: #212121;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      padding: 14px 28px;
       font-size: 1rem;
-      border-radius: 4px;
+      font-weight: 500;
+      border-radius: 8px;
       cursor: pointer;
-      transition: background-color 0.3s;
+      transition:
+        background-color 0.3s,
+        border-color 0.3s,
+        transform 0.2s;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
     }
 
     .login-container button:hover {
-      background-color: #357ae8;
+      background-color: #333;
+      border-color: #666;
+      transform: translateY(-2px);
     }
 
-    .header-controls {
+    .profile-menu-container {
       position: absolute;
-      top: 20px;
-      right: 20px;
-      display: flex;
-      gap: 10px;
-      z-index: 20;
+      top: 15px;
+      right: 15px;
+      z-index: 30;
     }
 
-    .logout-button,
-    .history-button {
-      background: #3a3a3a;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 4px;
+    .profile-button {
+      background: rgba(40, 40, 40, 0.8);
+      border: 1px solid #444;
+      border-radius: 50%;
+      width: 44px;
+      height: 44px;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       transition: background-color 0.3s;
     }
 
-    .logout-button:hover,
-    .history-button:hover {
-      background: #555;
+    .profile-button:hover {
+      background: #333;
+    }
+
+    .profile-button svg {
+      fill: white;
+      width: 24px;
+      height: 24px;
+    }
+
+    .profile-dropdown {
+      position: absolute;
+      top: 55px;
+      right: 0;
+      background-color: #282828;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      width: 180px;
+      overflow: hidden;
+      display: none;
+      flex-direction: column;
+      border: 1px solid #444;
+    }
+
+    .profile-dropdown.open {
+      display: flex;
+    }
+
+    .dropdown-item {
+      padding: 12px 16px;
+      color: #e0e0e0;
+      cursor: pointer;
+      background: none;
+      border: none;
+      text-align: left;
+      font-size: 0.95rem;
+      width: 100%;
+      transition: background-color 0.2s;
+    }
+
+    .dropdown-item:hover {
+      background-color: #3a3a3a;
     }
 
     .app-container {
       display: flex;
-      flex-direction: column;
+      flex-direction: column; /* Vertical layout for all screens */
       width: 100%;
       height: 100%;
+      position: relative;
     }
 
     .visualizer-container {
-      flex: 3; /* Takes ~60% of the space */
+      flex: 1;
+      min-height: 250px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -132,9 +185,9 @@ export class GdmLiveAudio extends LitElement {
     }
 
     .transcripts-container {
-      flex: 2; /* Takes ~40% of the space */
+      flex: 1;
       background-color: #121212;
-      margin: 20px;
+      margin: 10px;
       border-radius: 12px;
       padding: 20px;
       overflow-y: auto;
@@ -164,7 +217,7 @@ export class GdmLiveAudio extends LitElement {
       border-radius: 18px;
       font-size: 1rem;
       line-height: 1.5;
-      max-width: 75%;
+      max-width: 85%;
       color: white;
       word-wrap: break-word;
     }
@@ -179,7 +232,7 @@ export class GdmLiveAudio extends LitElement {
 
     .transcript-line.candidate {
       align-self: flex-end;
-      background-color: #005a9c; /* Professional blue */
+      background-color: #005a9c;
       border-bottom-right-radius: 4px;
     }
 
@@ -192,13 +245,14 @@ export class GdmLiveAudio extends LitElement {
     .history-panel {
       position: fixed;
       top: 0;
-      right: -400px; /* Start off-screen */
-      width: 400px;
+      right: -100%; /* Start off-screen */
+      width: 90%; /* More width on mobile */
+      max-width: 400px;
       height: 100vh;
       background-color: #1a1a1a;
       box-shadow: -5px 0 15px rgba(0, 0, 0, 0.5);
       transition: right 0.4s ease-in-out;
-      z-index: 15;
+      z-index: 100;
       display: flex;
       flex-direction: column;
     }
@@ -288,6 +342,28 @@ export class GdmLiveAudio extends LitElement {
       font-size: 0.95rem;
       line-height: 1.4;
     }
+
+    /* Tablet and Desktop Styles */
+    @media (min-width: 768px) {
+      .login-container h1 {
+        font-size: 3.5rem;
+      }
+
+      .login-container p {
+        font-size: 1.2rem;
+      }
+
+      /* On desktop, keep the column layout but center the transcript box */
+      .transcripts-container {
+        margin: 20px auto; /* Center horizontally, add vertical margin */
+        width: 90%;
+        max-width: 800px; /* Constrain width for readability */
+      }
+
+      .history-panel {
+        width: 400px;
+      }
+    }
   `;
 
   constructor() {
@@ -299,6 +375,11 @@ export class GdmLiveAudio extends LitElement {
     supabase.auth.onAuthStateChange((_event, session) => {
       this.supabaseSession = session;
     });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    document.body.removeEventListener('click', this.handleOutsideClick);
   }
 
   updated(changedProperties: PropertyValues) {
@@ -442,8 +523,6 @@ export class GdmLiveAudio extends LitElement {
 
             const inputTranscription =
               message.serverContent?.inputTranscription;
-            const isFinalInput =
-              (inputTranscription as any)?.status === 'FINAL';
             if (inputTranscription?.text) {
               const lastTranscript =
                 this.transcripts[this.transcripts.length - 1];
@@ -452,7 +531,8 @@ export class GdmLiveAudio extends LitElement {
                 !lastTranscript.isFinal
               ) {
                 lastTranscript.text += inputTranscription.text;
-                if (isFinalInput) {
+                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
+                if (inputTranscription.done) {
                   lastTranscript.isFinal = true;
                   this.saveTranscript('Candidate', lastTranscript.text);
                 }
@@ -461,10 +541,12 @@ export class GdmLiveAudio extends LitElement {
                 const newTranscript = {
                   speaker: 'Candidate',
                   text: inputTranscription.text,
-                  isFinal: isFinalInput,
+                  // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
+                  isFinal: inputTranscription.done,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
-                if (isFinalInput) {
+                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
+                if (inputTranscription.done) {
                   this.saveTranscript('Candidate', newTranscript.text);
                 }
               }
@@ -472,8 +554,6 @@ export class GdmLiveAudio extends LitElement {
 
             const outputTranscription =
               message.serverContent?.outputTranscription;
-            const isFinalOutput =
-              (outputTranscription as any)?.status === 'FINAL';
             if (outputTranscription?.text) {
               const lastTranscript =
                 this.transcripts[this.transcripts.length - 1];
@@ -482,7 +562,8 @@ export class GdmLiveAudio extends LitElement {
                 !lastTranscript.isFinal
               ) {
                 lastTranscript.text += outputTranscription.text;
-                if (isFinalOutput) {
+                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
+                if (outputTranscription.done) {
                   lastTranscript.isFinal = true;
                   this.saveTranscript('Examiner', lastTranscript.text);
                 }
@@ -491,10 +572,12 @@ export class GdmLiveAudio extends LitElement {
                 const newTranscript = {
                   speaker: 'Examiner',
                   text: outputTranscription.text,
-                  isFinal: isFinalOutput,
+                  // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
+                  isFinal: outputTranscription.done,
                 };
                 this.transcripts = [...this.transcripts, newTranscript];
-                if (isFinalOutput) {
+                // FIX: Property 'isFinal' does not exist on type 'Transcription'. Use 'done' instead.
+                if (outputTranscription.done) {
                   this.saveTranscript('Examiner', newTranscript.text);
                 }
               }
@@ -521,8 +604,8 @@ export class GdmLiveAudio extends LitElement {
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
-          // FIX: The 'interruption' property is now 'interruptionConfig' and the 'delaySeconds' setting is nested within a 'threshold' object.
-          interruptionConfig: {threshold: {delaySeconds: 1.0}},
+          // FIX: 'interruptionConfig' does not exist in type 'LiveConnectConfig'. Use 'interruption' instead.
+          interruption: {threshold: {delaySeconds: 1.0}},
           inputAudioTranscription: {languageCode: 'en-US'},
           outputAudioTranscription: {languageCode: 'en-US'},
         },
@@ -605,11 +688,33 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private toggleHistoryPanel() {
-    this.isHistoryPanelOpen = !this.isHistoryPanelOpen;
-    if (this.isHistoryPanelOpen) {
-      this.fetchHistory();
+  private handleOutsideClick = (event: MouseEvent) => {
+    const container = this.shadowRoot?.querySelector('.profile-menu-container');
+    if (container && !event.composedPath().includes(container)) {
+      this.isProfileMenuOpen = false;
+      document.body.removeEventListener('click', this.handleOutsideClick);
     }
+  };
+
+  private toggleProfileMenu() {
+    this.isProfileMenuOpen = !this.isProfileMenuOpen;
+    if (this.isProfileMenuOpen) {
+      setTimeout(() => {
+        document.body.addEventListener('click', this.handleOutsideClick);
+      }, 0);
+    } else {
+      document.body.removeEventListener('click', this.handleOutsideClick);
+    }
+  }
+
+  private openHistoryPanel() {
+    this.isHistoryPanelOpen = true;
+    this.isProfileMenuOpen = false; // Close menu after action
+    this.fetchHistory();
+  }
+
+  private closeHistoryPanel() {
+    this.isHistoryPanelOpen = false;
   }
 
   private async signInWithGoogle() {
@@ -624,27 +729,18 @@ export class GdmLiveAudio extends LitElement {
     return html`
       <div class="login-container">
         <h1>Live Audio Experience</h1>
-        <p>Sign in with your Google account to start the conversation.</p>
+        <p>
+          Engage in a seamless, real-time conversation. Sign in with your Google
+          account to begin.
+        </p>
         <button @click=${this.signInWithGoogle}>
           <svg
-            xmlns="http://www.w3.org/2000/svg"
             height="24"
-            viewBox="0 0 24 24"
             width="24"
-            fill="white">
+            viewBox="0 0 24 24"
+            fill="currentColor">
             <path
-              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              fill="#4285F4" />
-            <path
-              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              fill="#34A853" />
-            <path
-              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"
-              fill="#FBBC05" />
-            <path
-              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-              fill="#EA4335" />
-            <path d="M1 1h22v22H1z" fill="none" />
+              d="M21.35,11.1H12.18V13.83H18.69C18.36,17.64 15.19,19.27 12.19,19.27C8.36,19.27 5,16.25 5,12C5,7.9 8.2,4.73 12.19,4.73C15.29,4.73 17.1,6.7 17.1,6.7L19,4.72C19,4.72 16.56,2 12.19,2C6.42,2 2.03,6.8 2.03,12C2.03,17.05 6.16,22 12.19,22C17.6,22 21.5,18.33 21.5,12.91C21.5,11.76 21.35,11.1 21.35,11.1V11.1Z"></path>
           </svg>
           Sign in with Google
         </button>
@@ -663,7 +759,7 @@ export class GdmLiveAudio extends LitElement {
       <div class="history-panel ${this.isHistoryPanelOpen ? 'open' : ''}">
         <div class="history-header">
           <h2>Chat History</h2>
-          <button @click=${this.toggleHistoryPanel}>&times;</button>
+          <button @click=${this.closeHistoryPanel}>&times;</button>
         </div>
         <div class="history-content">
           ${sortedSessionIds.length === 0
@@ -697,12 +793,29 @@ export class GdmLiveAudio extends LitElement {
   private renderApp() {
     return html`
       <div class="app-container">
-        <div class="header-controls">
-          <button class="history-button" @click=${this.toggleHistoryPanel}>
-            History
+        <div class="profile-menu-container">
+          <button
+            class="profile-button"
+            @click=${this.toggleProfileMenu}
+            aria-label="Profile menu">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              height="24px"
+              viewBox="0 0 24 24"
+              width="24px">
+              <path d="M0 0h24v24H0V0z" fill="none" />
+              <path
+                d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+            </svg>
           </button>
-          <button class="logout-button" @click=${this.signOut}>Logout</button>
+          <div class="profile-dropdown ${this.isProfileMenuOpen ? 'open' : ''}">
+            <button class="dropdown-item" @click=${this.openHistoryPanel}>
+              History
+            </button>
+            <button class="dropdown-item" @click=${this.signOut}>Logout</button>
+          </div>
         </div>
+
         ${this.renderHistoryPanel()}
         <div class="visualizer-container">
           <gdm-audio-visualizer
