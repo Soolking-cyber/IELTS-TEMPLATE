@@ -1423,28 +1423,48 @@ export class GdmLiveAudio extends LitElement {
 
   private async generateCueCard() {
     try {
-      const prompt = `Generate a random IELTS Speaking Part 2 cue card. The response must be a valid JSON object with three keys: 'topic' (a short string for the general theme, e.g., 'A memorable trip'), 'description' (the main introductory text for the cue card), and 'points' (an array of 3-4 strings, each being a bullet point for what the candidate should talk about). Do not wrap the JSON in a markdown block or any other text.`;
+      const {count, error: countError} = await supabase
+        .from('ielts_part2_cues')
+        .select('*', {count: 'exact', head: true});
 
-      const response = await this.client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-      });
-
-      let jsonString = response.text;
-      // The model might still wrap the JSON in markdown, so we need to clean it.
-      const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
-      if (jsonMatch && jsonMatch[0]) {
-        jsonString = jsonMatch[0];
-      } else {
-        throw new Error('Invalid JSON response from model');
+      if (countError || count === null) {
+        throw new Error(
+          countError?.message ||
+            'Could not get cue card count from database.',
+        );
       }
 
-      const result = JSON.parse(jsonString);
+      if (count === 0) {
+        throw new Error('No cue cards found in the database.');
+      }
 
-      this.part2Topic = result.topic;
+      const randomIndex = Math.floor(Math.random() * count);
+
+      const {data, error} = await supabase
+        .from('ielts_part2_cues')
+        .select('title, bullet_a, bullet_b, bullet_c, bullet_d')
+        .range(randomIndex, randomIndex)
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data) {
+        throw new Error('Could not fetch a cue card.');
+      }
+
+      const points = [
+        data.bullet_a,
+        data.bullet_b,
+        data.bullet_c,
+        data.bullet_d,
+      ].filter((p): p is string => !!p);
+
+      this.part2Topic = data.title;
       this.part2CueCard = {
-        description: result.description,
-        points: result.points,
+        description: data.title,
+        points: points,
       };
       this.transcripts = []; // Clear the "generating" message
       this.startPart2Preparation();
