@@ -21,7 +21,7 @@ import type {Session as SupabaseSession} from '@supabase/supabase-js';
 const PART1_INSTRUCTION = `You are an IELTS examiner conducting Part 1 of the speaking test.
 Ask the candidate around 11-12 questions on 3 different general topics.
 Keep your questions concise. The user is the candidate.
-Start the conversation by asking your first question now.`;
+Start the conversation byasking your first question now.`;
 
 const PART2_INSTRUCTION = `You are an IELTS examiner for Part 2 of the speaking test. The candidate will now speak for 1-2 minutes. Your task is to listen silently without speaking or interrupting.`;
 
@@ -98,7 +98,8 @@ export class GdmLiveAudio extends LitElement {
   private nextStartTime = 0;
   private mediaStream: MediaStream;
   private sourceNode: MediaStreamAudioSourceNode;
-  private scriptProcessorNode: ScriptProcessorNode;
+  private audioWorkletNode: AudioWorkletNode | null = null;
+  private audioWorkletLoaded = false;
   private sources = new Set<AudioBufferSourceNode>();
 
   static styles = css`
@@ -810,11 +811,21 @@ export class GdmLiveAudio extends LitElement {
     supabase.auth.onAuthStateChange((_event, session) => {
       this.supabaseSession = session;
     });
+
+    window.addEventListener('beforeunload', this.handleBeforeUnload);
   }
+
+  private handleBeforeUnload = () => {
+    // Attempt to cleanly close the session on page unload.
+    if (this.isRecording && this.session) {
+      this.session.close();
+    }
+  };
 
   disconnectedCallback() {
     super.disconnectedCallback();
     document.body.removeEventListener('click', this.handleOutsideClick);
+    window.removeEventListener('beforeunload', this.handleBeforeUnload);
     if (this.part2TimerInterval) {
       clearInterval(this.part2TimerInterval);
     }
@@ -883,6 +894,32 @@ export class GdmLiveAudio extends LitElement {
     });
 
     this.outputNode.connect(this.outputAudioContext.destination);
+
+    if (!this.audioWorkletLoaded && this.inputAudioContext.audioWorklet) {
+      const processorCode = `
+        class AudioSenderProcessor extends AudioWorkletProcessor {
+          process(inputs) {
+            const input = inputs[0];
+            if (input && input.length > 0) {
+              // Post the Float32Array of the first channel back to the main thread.
+              this.port.postMessage(input[0]);
+            }
+            return true; // Keep processor alive
+          }
+        }
+        registerProcessor('audio-sender-processor', AudioSenderProcessor);
+      `;
+      const blob = new Blob([processorCode], {type: 'application/javascript'});
+      const processorUrl = URL.createObjectURL(blob);
+      try {
+        await this.inputAudioContext.audioWorklet.addModule(processorUrl);
+        this.audioWorkletLoaded = true;
+      } catch (e) {
+        console.error('Error loading audio worklet module', e);
+      } finally {
+        URL.revokeObjectURL(processorUrl);
+      }
+    }
   }
 
   private async saveCurrentSessionHistory() {
@@ -1063,6 +1100,7 @@ export class GdmLiveAudio extends LitElement {
   private async initSession(
     systemInstruction: string,
     responseModalities: Modality[] = [Modality.AUDIO],
+    extraConfig: object = {},
   ) {
     if (!this.client) return;
     const model = 'gemini-2.5-flash-preview-native-audio-dialog';
@@ -1149,7 +1187,9 @@ export class GdmLiveAudio extends LitElement {
             console.error(e);
           },
           onclose: (e: CloseEvent) => {
-            console.log('Session closed:', e.reason);
+            console.log(
+              `Session closed. Code: ${e.code}, Reason: "${e.reason}", Clean: ${e.wasClean}`,
+            );
           },
         },
         config: {
@@ -1165,6 +1205,7 @@ export class GdmLiveAudio extends LitElement {
           },
           outputAudioTranscription: {languageCodes: ['en-US']},
           systemInstruction,
+          ...extraConfig,
         },
       });
     } catch (e) {
@@ -1175,6 +1216,7 @@ export class GdmLiveAudio extends LitElement {
   private async startRecording(
     systemInstruction: string,
     responseModalities: Modality[] = [Modality.AUDIO],
+    extraConfig: object = {},
   ) {
     if (this.userCredits !== null && this.userCredits <= 0) {
       this.isOutOfCreditsModalOpen = true;
@@ -1187,7 +1229,7 @@ export class GdmLiveAudio extends LitElement {
     this.transcripts = [];
     this.currentSessionId = crypto.randomUUID();
 
-    await this.initSession(systemInstruction, responseModalities);
+    await this.initSession(systemInstruction, responseModalities, extraConfig);
     if (!this.session) {
       console.error('Could not start new session.');
       return;
@@ -1206,24 +1248,27 @@ export class GdmLiveAudio extends LitElement {
       );
       this.sourceNode.connect(this.inputNode);
 
-      const bufferSize = 4096;
-      this.scriptProcessorNode = this.inputAudioContext.createScriptProcessor(
-        bufferSize,
-        1,
-        1,
+      if (!this.audioWorkletLoaded) {
+        console.error('Audio worklet is not available or failed to load.');
+        this.stopRecording();
+        return;
+      }
+
+      this.audioWorkletNode = new AudioWorkletNode(
+        this.inputAudioContext,
+        'audio-sender-processor',
       );
 
-      this.scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
+      this.audioWorkletNode.port.onmessage = (
+        event: MessageEvent<Float32Array>,
+      ) => {
         if (!this.isRecording || !this.session) return;
-
-        const inputBuffer = audioProcessingEvent.inputBuffer;
-        const pcmData = inputBuffer.getChannelData(0);
-
+        const pcmData = event.data;
         this.session.sendRealtimeInput({media: createBlob(pcmData)});
       };
 
-      this.sourceNode.connect(this.scriptProcessorNode);
-      this.scriptProcessorNode.connect(this.inputAudioContext.destination);
+      this.sourceNode.connect(this.audioWorkletNode);
+      this.audioWorkletNode.connect(this.inputAudioContext.destination);
 
       this.isRecording = true;
       this.creditUsageInterval = window.setInterval(
@@ -1267,12 +1312,12 @@ export class GdmLiveAudio extends LitElement {
       this.session = null;
     }
 
-    if (this.scriptProcessorNode && this.sourceNode && this.inputAudioContext) {
-      this.scriptProcessorNode.disconnect();
+    if (this.audioWorkletNode && this.sourceNode) {
+      this.audioWorkletNode.disconnect();
       this.sourceNode.disconnect();
     }
 
-    this.scriptProcessorNode = null;
+    this.audioWorkletNode = null;
     this.sourceNode = null;
 
     if (this.mediaStream) {
@@ -1358,7 +1403,9 @@ export class GdmLiveAudio extends LitElement {
     if (!this.currentPart) return;
 
     if (this.currentPart === 'part1') {
-      await this.startRecording(PART1_INSTRUCTION);
+      await this.startRecording(PART1_INSTRUCTION, undefined, {
+        thinkingConfig: {thinkingBudget: 0},
+      });
     } else if (this.currentPart === 'part2') {
       this.part2State = 'generating';
       this.transcripts = [
@@ -1376,30 +1423,22 @@ export class GdmLiveAudio extends LitElement {
 
   private async generateCueCard() {
     try {
-      const prompt = `Generate a random IELTS Speaking Part 2 cue card. The response should be a JSON object with three keys: 'topic' (a short string for the general theme, e.g., 'A memorable trip'), 'description' (the main introductory text for the cue card), and 'points' (an array of 3-4 strings, each being a bullet point for what the candidate should talk about).`;
+      const prompt = `Generate a random IELTS Speaking Part 2 cue card. The response must be a valid JSON object with three keys: 'topic' (a short string for the general theme, e.g., 'A memorable trip'), 'description' (the main introductory text for the cue card), and 'points' (an array of 3-4 strings, each being a bullet point for what the candidate should talk about). Do not wrap the JSON in a markdown block or any other text.`;
 
       const response = await this.client.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              topic: {type: Type.STRING},
-              description: {type: Type.STRING},
-              points: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.STRING,
-                },
-              },
-            },
-          },
-        },
       });
 
-      const jsonString = response.text;
+      let jsonString = response.text;
+      // The model might still wrap the JSON in markdown, so we need to clean it.
+      const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+      if (jsonMatch && jsonMatch[0]) {
+        jsonString = jsonMatch[0];
+      } else {
+        throw new Error('Invalid JSON response from model');
+      }
+
       const result = JSON.parse(jsonString);
 
       this.part2Topic = result.topic;
