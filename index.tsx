@@ -23,8 +23,7 @@ Ask the candidate around 11-12 questions on 3 different general topics.
 Keep your questions concise. The user is the candidate.
 Start the conversation by asking your first question now.`;
 
-const PART2_INSTRUCTION = `You are an IELTS examiner. The candidate is about to start Part 2 of the speaking test.
-Do not speak or interrupt them. Only listen.`;
+const PART2_INSTRUCTION = `You are an IELTS examiner for Part 2 of the speaking test. The candidate will now speak for 1-2 minutes. Your task is to listen silently without speaking or interrupting.`;
 
 const PART3_INSTRUCTION_TEMPLATE = (topic: string) =>
   `You are an IELTS examiner conducting Part 3 of the speaking test.
@@ -70,7 +69,10 @@ export class GdmLiveAudio extends LitElement {
     | 'preparing'
     | 'speaking'
     | 'finished' = 'idle';
-  @state() private part2CueCard: string | null = null;
+  @state() private part2CueCard: {
+    description: string;
+    points: string[];
+  } | null = null;
   @state() private part2Topic: string | null = null;
   @state() private part2TopicForPart3: string | null = null; // Persists topic for Part 3
   @state() private part2PreparationTimeLeft = 60;
@@ -504,6 +506,33 @@ export class GdmLiveAudio extends LitElement {
       margin: 0;
       line-height: 1.6;
       white-space: pre-wrap;
+    }
+
+    .cue-card-description {
+      margin-bottom: 15px;
+    }
+
+    .cue-card-points {
+      list-style-type: none;
+      padding-left: 0;
+      margin: 0;
+      text-align: left;
+    }
+
+    .cue-card-points li {
+      position: relative;
+      padding-left: 1.5em; /* Space for the bullet */
+      margin-bottom: 0.8em;
+      line-height: 1.5;
+    }
+
+    .cue-card-points li::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+      font-size: 1.2em;
+      line-height: 1;
+      color: #c0c0c0;
     }
 
     .timer {
@@ -1347,7 +1376,7 @@ export class GdmLiveAudio extends LitElement {
 
   private async generateCueCard() {
     try {
-      const prompt = `Generate a random IELTS Speaking Part 2 cue card. The cue card should describe a topic and include 3-4 bullet points on what the candidate should talk about. Output a JSON object with two keys: 'topic' (a short string for the general theme, e.g., 'A memorable trip') and 'cueCard' (the full text of the cue card).`;
+      const prompt = `Generate a random IELTS Speaking Part 2 cue card. The response should be a JSON object with three keys: 'topic' (a short string for the general theme, e.g., 'A memorable trip'), 'description' (the main introductory text for the cue card), and 'points' (an array of 3-4 strings, each being a bullet point for what the candidate should talk about).`;
 
       const response = await this.client.models.generateContent({
         model: 'gemini-2.5-flash',
@@ -1358,7 +1387,13 @@ export class GdmLiveAudio extends LitElement {
             type: Type.OBJECT,
             properties: {
               topic: {type: Type.STRING},
-              cueCard: {type: Type.STRING},
+              description: {type: Type.STRING},
+              points: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.STRING,
+                },
+              },
             },
           },
         },
@@ -1368,7 +1403,10 @@ export class GdmLiveAudio extends LitElement {
       const result = JSON.parse(jsonString);
 
       this.part2Topic = result.topic;
-      this.part2CueCard = result.cueCard;
+      this.part2CueCard = {
+        description: result.description,
+        points: result.points,
+      };
       this.transcripts = []; // Clear the "generating" message
       this.startPart2Preparation();
     } catch (e) {
@@ -1401,12 +1439,9 @@ export class GdmLiveAudio extends LitElement {
     this.part2State = 'speaking';
     this.part2SpeakingTimeLeft = 120;
 
-    // By requesting an audio modality, we ensure that the user's speech is
-    // transcribed. The system prompt instructs the AI not to speak.
-    await this.startRecording(PART2_INSTRUCTION, [
-      Modality.AUDIO,
-      Modality.TEXT,
-    ]);
+    // The model is instructed to be silent. We only request TEXT modality
+    // as user speech is transcribed separately via inputTranscription.
+    await this.startRecording(PART2_INSTRUCTION, [Modality.TEXT]);
 
     this.part2TimerInterval = window.setInterval(() => {
       this.part2SpeakingTimeLeft -= 1;
@@ -1784,9 +1819,6 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private renderIeltsContent() {
-    const isPart2Active =
-      this.currentPart === 'part2' && this.part2State === 'preparing';
-
     return html`
       ${this.currentPart === 'part2' &&
       (this.part2State === 'preparing' || this.part2State === 'speaking')
@@ -1796,11 +1828,14 @@ export class GdmLiveAudio extends LitElement {
                 ? html`
                     <div class="cue-card">
                       <h4>IELTS Speaking Part 2</h4>
-                      <p
-                        .innerHTML=${this.part2CueCard.replace(
-                          /\n/g,
-                          '<br>',
-                        )}></p>
+                      <p class="cue-card-description">
+                        ${this.part2CueCard.description}
+                      </p>
+                      <ul class="cue-card-points">
+                        ${this.part2CueCard.points.map(
+                          (point) => html`<li>${point}</li>`,
+                        )}
+                      </ul>
                     </div>
                   `
                 : ''}
