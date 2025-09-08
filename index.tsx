@@ -1157,11 +1157,11 @@ export class GdmLiveAudio extends LitElement {
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
-          // FIX: Moved `endOfSpeechTimeoutMillis` into `inputAudioTranscription` as it is an input-related property.
           inputAudioTranscription: {
             languageCodes: ['en-US'],
             model: 'chirp',
-            endOfSpeechTimeoutMillis: 1500,
+            // Increased to allow for longer pauses during monologues (e.g. Part 2)
+            endOfSpeechTimeoutMillis: 5000,
           },
           outputAudioTranscription: {languageCodes: ['en-US']},
           systemInstruction,
@@ -1439,9 +1439,10 @@ export class GdmLiveAudio extends LitElement {
     this.part2State = 'speaking';
     this.part2SpeakingTimeLeft = 120;
 
-    // The model is instructed to be silent. We only request TEXT modality
-    // as user speech is transcribed separately via inputTranscription.
-    await this.startRecording(PART2_INSTRUCTION, [Modality.TEXT]);
+    // The model is instructed to be silent. We request AUDIO modality to ensure
+    // the connection remains active and provides input transcriptions.
+    // With TEXT modality, no transcription was being returned during Part 2.
+    await this.startRecording(PART2_INSTRUCTION, [Modality.AUDIO]);
 
     this.part2TimerInterval = window.setInterval(() => {
       this.part2SpeakingTimeLeft -= 1;
