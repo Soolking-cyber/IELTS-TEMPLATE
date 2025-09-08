@@ -65,7 +65,7 @@ export class GdmLiveAudio extends LitElement {
   @state() private currentPart: 'part1' | 'part2' | 'part3' | null = null;
   @state() private part2State:
     | 'idle'
-    | 'generating'
+    | 'fetching'
     | 'preparing'
     | 'speaking'
     | 'finished' = 'idle';
@@ -1101,6 +1101,7 @@ export class GdmLiveAudio extends LitElement {
     systemInstruction: string,
     responseModalities: Modality[] = [Modality.AUDIO],
     extraConfig: object = {},
+    endOfSpeechTimeout?: number,
   ) {
     if (!this.client) return;
     const model = 'gemini-2.5-flash-preview-native-audio-dialog';
@@ -1200,8 +1201,8 @@ export class GdmLiveAudio extends LitElement {
           inputAudioTranscription: {
             languageCodes: ['en-US'],
             model: 'chirp',
-            // Increased to allow for longer pauses during monologues (e.g. Part 2)
-            endOfSpeechTimeoutMillis: 5000,
+            // Use override if provided, otherwise default to 5000
+            endOfSpeechTimeoutMillis: endOfSpeechTimeout ?? 5000,
           },
           outputAudioTranscription: {languageCodes: ['en-US']},
           systemInstruction,
@@ -1217,6 +1218,7 @@ export class GdmLiveAudio extends LitElement {
     systemInstruction: string,
     responseModalities: Modality[] = [Modality.AUDIO],
     extraConfig: object = {},
+    endOfSpeechTimeout?: number,
   ) {
     if (this.userCredits !== null && this.userCredits <= 0) {
       this.isOutOfCreditsModalOpen = true;
@@ -1229,7 +1231,12 @@ export class GdmLiveAudio extends LitElement {
     this.transcripts = [];
     this.currentSessionId = crypto.randomUUID();
 
-    await this.initSession(systemInstruction, responseModalities, extraConfig);
+    await this.initSession(
+      systemInstruction,
+      responseModalities,
+      extraConfig,
+      endOfSpeechTimeout,
+    );
     if (!this.session) {
       console.error('Could not start new session.');
       return;
@@ -1403,15 +1410,13 @@ export class GdmLiveAudio extends LitElement {
     if (!this.currentPart) return;
 
     if (this.currentPart === 'part1') {
-      await this.startRecording(PART1_INSTRUCTION, undefined, {
-        thinkingConfig: {thinkingBudget: 0},
-      });
+      await this.startRecording(PART1_INSTRUCTION);
     } else if (this.currentPart === 'part2') {
-      this.part2State = 'generating';
+      this.part2State = 'fetching';
       this.transcripts = [
-        {speaker: 'Examiner', text: 'Generating your Part 2 cue card...'},
+        {speaker: 'Examiner', text: 'Fetching your Part 2 cue card...'},
       ];
-      await this.generateCueCard();
+      await this.fetchCueCard();
     } else if (this.currentPart === 'part3') {
       if (this.part2TopicForPart3) {
         await this.startRecording(
@@ -1421,59 +1426,68 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private async generateCueCard() {
+  private async fetchCueCard() {
     try {
-      const {count, error: countError} = await supabase
-        .from('ielts_part2_cues')
-        .select('*', {count: 'exact', head: true});
+      const {data, error} = await supabase.rpc('get_random_cue_card');
 
-      if (countError || count === null) {
+      if (error) {
+        if (
+          error.message.includes('function get_random_cue_card() does not exist')
+        ) {
+          throw new Error(
+            'The `get_random_cue_card` database function is missing. Please run the required SQL script in your Supabase project.',
+          );
+        }
+        throw error; // Re-throw other RPC errors
+      }
+
+      // This is the most likely failure point if RLS is enabled without a policy.
+      // The RPC call succeeds but returns no data.
+      if (!data) {
         throw new Error(
-          countError?.message ||
-            'Could not get cue card count from database.',
+          'No cue card was returned from the database. This is likely due to Row Level Security (RLS). Please check that RLS is disabled on the `ielts_part2_cues` table, or that a policy exists which allows authenticated users to SELECT from it.',
         );
       }
 
-      if (count === 0) {
-        throw new Error('No cue cards found in the database.');
-      }
+      const cueCardData = Array.isArray(data) ? data[0] : data;
 
-      const randomIndex = Math.floor(Math.random() * count);
-
-      const {data, error} = await supabase
-        .from('ielts_part2_cues')
-        .select('title, bullet_a, bullet_b, bullet_c, bullet_d')
-        .range(randomIndex, randomIndex)
-        .single();
-
-      if (error) {
-        throw error;
-      }
-
-      if (!data) {
-        throw new Error('Could not fetch a cue card.');
+      // Also check if the returned object is empty, just in case.
+      if (Object.keys(cueCardData).length === 0) {
+        throw new Error(
+          'The database function returned an empty object. Please check the `get_random_cue_card` function definition in Supabase.',
+        );
       }
 
       const points = [
-        data.bullet_a,
-        data.bullet_b,
-        data.bullet_c,
-        data.bullet_d,
-      ].filter((p): p is string => !!p);
+        cueCardData.bullet_a,
+        cueCardData.bullet_b,
+        cueCardData.bullet_c,
+        cueCardData.bullet_d,
+      ].filter((p): p is string => !!p && p.trim() !== '');
 
-      this.part2Topic = data.title;
+      if (!cueCardData.title || points.length === 0) {
+        console.log('Incomplete data received:', cueCardData);
+        throw new Error(
+          'The fetched cue card is incomplete. It is missing a title or bullet points.',
+        );
+      }
+
+      this.part2Topic = cueCardData.title;
       this.part2CueCard = {
-        description: data.title,
+        description: cueCardData.title,
         points: points,
       };
-      this.transcripts = []; // Clear the "generating" message
+      this.transcripts = []; // Clear the "fetching" message
       this.startPart2Preparation();
     } catch (e) {
-      console.error('Error generating cue card:', e);
+      console.error('Error fetching cue card:', e);
+      const errorMessage =
+        e instanceof Error ? e.message : 'An unknown error occurred.';
+
       this.transcripts = [
         {
           speaker: 'Examiner',
-          text: 'Sorry, there was an error generating the cue card. Please try again.',
+          text: `Sorry, there was an error fetching the cue card. Please try again. Details: ${errorMessage}`,
         },
       ];
       this.part2State = 'idle';
@@ -1500,8 +1514,8 @@ export class GdmLiveAudio extends LitElement {
 
     // The model is instructed to be silent. We request AUDIO modality to ensure
     // the connection remains active and provides input transcriptions.
-    // With TEXT modality, no transcription was being returned during Part 2.
-    await this.startRecording(PART2_INSTRUCTION, [Modality.AUDIO]);
+    // Set a 120-second timeout to prevent interruptions during the monologue.
+    await this.startRecording(PART2_INSTRUCTION, [Modality.AUDIO], {}, 120000);
 
     this.part2TimerInterval = window.setInterval(() => {
       this.part2SpeakingTimeLeft -= 1;
@@ -1557,7 +1571,7 @@ export class GdmLiveAudio extends LitElement {
       .from('profiles')
       .select('credits')
       .eq('id', this.supabaseSession.user.id)
-      .single();
+      .maybeSingle();
 
     if (error) {
       console.error('Error fetching user profile:', error.message);
