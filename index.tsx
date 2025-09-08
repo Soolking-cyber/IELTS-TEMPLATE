@@ -88,6 +88,7 @@ export class GdmLiveAudio extends LitElement {
     checkboxLabel: string;
   } | null = null;
   @state() private isIntroConfirmed = false;
+  @state() private isStopConfirmModalOpen = false;
 
   private client: GoogleGenAI;
   private session: Session;
@@ -754,7 +755,7 @@ export class GdmLiveAudio extends LitElement {
 
     .modal-content p {
       color: #bbb;
-      margin-bottom: 25px;
+      margin-bottom: 20px;
       line-height: 1.6;
     }
 
@@ -779,6 +780,22 @@ export class GdmLiveAudio extends LitElement {
       background-color: #444;
       color: #888;
       cursor: not-allowed;
+    }
+
+    .modal-button-container {
+      display: flex;
+      gap: 15px;
+      margin-top: 10px;
+    }
+    .modal-button-container .modal-button {
+      width: auto;
+      flex: 1;
+    }
+    .modal-button.secondary {
+      background-color: #4f4f4f;
+    }
+    .modal-button.secondary:hover {
+      background-color: #5f5f5f;
     }
 
     /* Tablet and Desktop Styles */
@@ -1353,11 +1370,16 @@ export class GdmLiveAudio extends LitElement {
 
     this.currentPart = part;
     this.transcripts = [];
-    this.part2CueCard = null;
-    this.part2Topic = null;
-    this.part2State = 'idle';
-    this.part2PreparationTimeLeft = 60;
-    this.part2SpeakingTimeLeft = 120;
+
+    // Only reset Part 2 state if the user is starting a new Part 2 session.
+    // This preserves the topic from the last completed Part 2 for Part 3.
+    if (part === 'part2') {
+      this.part2CueCard = null;
+      this.part2Topic = null;
+      this.part2State = 'idle';
+      this.part2PreparationTimeLeft = 60;
+      this.part2SpeakingTimeLeft = 120;
+    }
 
     switch (part) {
       case 'part1':
@@ -1524,8 +1546,8 @@ export class GdmLiveAudio extends LitElement {
 
     // The model is instructed to be silent. We request AUDIO modality to ensure
     // the connection remains active and provides input transcriptions.
-    // Set a 120-second timeout to prevent interruptions during the monologue.
-    await this.startRecording(PART2_INSTRUCTION, [Modality.AUDIO], {}, 120000);
+    // The default endOfSpeechTimeout is used to allow for real-time transcription.
+    await this.startRecording(PART2_INSTRUCTION, [Modality.AUDIO], {});
 
     this.part2TimerInterval = window.setInterval(() => {
       this.part2SpeakingTimeLeft -= 1;
@@ -1646,9 +1668,18 @@ export class GdmLiveAudio extends LitElement {
     this.currentView = 'pricing';
   }
 
+  private requestStopSession() {
+    this.isStopConfirmModalOpen = true;
+  }
+
+  private async confirmStopSession() {
+    await this.stopCurrentSession();
+    this.isStopConfirmModalOpen = false;
+  }
+
   private async handleVisualizerClick() {
     if (this.isRecording) {
-      await this.stopRecording();
+      this.requestStopSession();
     } else if (this.currentPart) {
       // If a part is selected but not running, start it.
       // Re-calling handlePartSelect is the correct way to trigger
@@ -1670,6 +1701,31 @@ export class GdmLiveAudio extends LitElement {
           <button class="modal-button" @click=${this.redirectToPricing}>
             View Plans
           </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderStopConfirmModal() {
+    return html`
+      <div class="modal-overlay">
+        <div class="modal-content">
+          <h2>End Session?</h2>
+          <p>
+            Are you sure you want to end this practice session? Your feedback,
+            including an estimated IELTS score, will be processed and available
+            in the History section shortly.
+          </p>
+          <div class="modal-button-container">
+            <button
+              class="modal-button secondary"
+              @click=${() => (this.isStopConfirmModalOpen = false)}>
+              Cancel
+            </button>
+            <button class="modal-button" @click=${this.confirmStopSession}>
+              End Session
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -1908,7 +1964,7 @@ export class GdmLiveAudio extends LitElement {
       (this.part2State === 'preparing' || this.part2State === 'speaking')
         ? html`
             <div class="cue-card-container">
-              ${this.part2State === 'preparing' && this.part2CueCard
+              ${this.part2CueCard
                 ? html`
                     <div class="cue-card">
                       <h4>IELTS Speaking Part 2</h4>
@@ -1923,9 +1979,8 @@ export class GdmLiveAudio extends LitElement {
                     </div>
                   `
                 : ''}
-              ${this.part2State === 'speaking' && !this.part2CueCard
-                ? ''
-                : html`
+              ${this.part2CueCard
+                ? html`
                     ${this.part2State === 'preparing'
                       ? html`<div class="timer">
                           Prepare: ${this.part2PreparationTimeLeft}s
@@ -1941,7 +1996,8 @@ export class GdmLiveAudio extends LitElement {
                               .padStart(2, '0')}
                         </div>`
                       : ''}
-                  `}
+                  `
+                : ''}
             </div>
           `
         : ''}
@@ -1961,6 +2017,7 @@ export class GdmLiveAudio extends LitElement {
       <div class="app-container">
         ${this.isOutOfCreditsModalOpen ? this.renderOutOfCreditsModal() : ''}
         ${this.isIntroModalOpen ? this.renderIntroModal() : ''}
+        ${this.isStopConfirmModalOpen ? this.renderStopConfirmModal() : ''}
 
         <div class="profile-menu-container">
           <button
@@ -2011,7 +2068,10 @@ export class GdmLiveAudio extends LitElement {
           <button
             class="part-button ${this.currentPart === 'part1' ? 'active' : ''}"
             ?disabled=${this.isRecording && this.currentPart !== 'part1'}
-            @click=${() => this.handlePartSelect('part1')}>
+            @click=${() =>
+              this.isRecording && this.currentPart === 'part1'
+                ? this.requestStopSession()
+                : this.handlePartSelect('part1')}>
             Part 1
           </button>
           <button
@@ -2023,7 +2083,10 @@ export class GdmLiveAudio extends LitElement {
           <button
             class="part-button ${this.currentPart === 'part3' ? 'active' : ''}"
             ?disabled=${this.isRecording && this.currentPart !== 'part3'}
-            @click=${() => this.handlePartSelect('part3')}>
+            @click=${() =>
+              this.isRecording && this.currentPart === 'part3'
+                ? this.requestStopSession()
+                : this.handlePartSelect('part3')}>
             Part 3
           </button>
         </div>
