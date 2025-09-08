@@ -21,7 +21,7 @@ import type {Session as SupabaseSession} from '@supabase/supabase-js';
 const PART1_INSTRUCTION = `You are an IELTS examiner conducting Part 1 of the speaking test.
 Ask the candidate around 11-12 questions on 3 different general topics.
 Keep your questions concise. The user is the candidate.
-Start the conversation byasking your first question now.`;
+Start the conversation by asking your first question now.`;
 
 const PART2_INSTRUCTION = `You are an IELTS examiner for Part 2 of the speaking test. The candidate will now speak for 1-2 minutes. Your task is to listen silently without speaking or interrupting.`;
 
@@ -997,7 +997,7 @@ export class GdmLiveAudio extends LitElement {
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const prompt = `Analyze the following IELTS candidate's speech. Provide one sentence of feedback that includes two relevant, advanced vocabulary words the candidate could use to improve their answer. Enclose the vocabulary words in double asterisks for emphasis (e.g., **word**). The feedback must be a single, concise sentence directly related to their speech. Here is the transcript: "${candidateTranscripts}"`;
+          const prompt = `Analyze the following IELTS candidate's speech. Provide one sentence of feedback that includes two relevant, relatively advanced vocabulary words the candidate could use to improve their answer with 2 usage examples.  The feedback must be a single, concise sentence directly related to their speech with properly assessed IELTS score. Here is the transcript: "${candidateTranscripts}"`;
 
           const response = await this.client.models.generateContent({
             model: 'gemini-2.5-flash',
@@ -1315,7 +1315,11 @@ export class GdmLiveAudio extends LitElement {
     this.isRecording = false;
 
     if (this.session) {
-      this.session.close();
+      try {
+        this.session.close();
+      } catch (e) {
+        console.error('Ignoring error during session.close():', e);
+      }
       this.session = null;
     }
 
@@ -1410,7 +1414,9 @@ export class GdmLiveAudio extends LitElement {
     if (!this.currentPart) return;
 
     if (this.currentPart === 'part1') {
-      await this.startRecording(PART1_INSTRUCTION);
+      await this.startRecording(PART1_INSTRUCTION, undefined, {
+        thinkingConfig: {thinkingBudget: 0},
+      });
     } else if (this.currentPart === 'part2') {
       this.part2State = 'fetching';
       this.transcripts = [
@@ -1421,6 +1427,10 @@ export class GdmLiveAudio extends LitElement {
       if (this.part2TopicForPart3) {
         await this.startRecording(
           PART3_INSTRUCTION_TEMPLATE(this.part2TopicForPart3),
+          undefined,
+          {
+            thinkingConfig: {thinkingBudget: 0},
+          },
         );
       }
     }
