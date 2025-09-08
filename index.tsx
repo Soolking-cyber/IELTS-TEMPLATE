@@ -19,16 +19,22 @@ import {supabase} from './supabase-client';
 import type {Session as SupabaseSession} from '@supabase/supabase-js';
 
 const PART1_INSTRUCTION = `You are an IELTS examiner conducting Part 1 of the speaking test.
-Introduce yourself and the part briefly. Then, ask the candidate around 11-12 questions on 3 different general topics.
-Keep your questions concise. The user is the candidate. Start the conversation now.`;
+Ask the candidate around 11-12 questions on 3 different general topics.
+Keep your questions concise. The user is the candidate.
+Start the conversation by asking your first question now.`;
 
 const PART2_INSTRUCTION = `You are an IELTS examiner. The candidate is about to start Part 2 of the speaking test.
 Do not speak or interrupt them. Only listen.`;
 
 const PART3_INSTRUCTION_TEMPLATE = (topic: string) =>
   `You are an IELTS examiner conducting Part 3 of the speaking test.
-The topic from Part 2 was about '${topic}'. Engage in a two-way discussion with the candidate based on this topic.
-Ask abstract, opinion-based questions. The discussion should last 4-5 minutes. Start the conversation now.`;
+The topic is a follow-up to Part 2, which was about '${topic}'.
+Your role is to ask abstract and opinion-based questions related to this topic.
+Keep your questions concise and ask only one question at a time.
+Do not provide your own opinions, explanations, or long statements.
+After the candidate responds, listen carefully and then ask a relevant follow-up question.
+The goal is to simulate a real two-way discussion for 4-5 minutes.
+Start the conversation now by asking your first question.`;
 
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
@@ -68,7 +74,18 @@ export class GdmLiveAudio extends LitElement {
   @state() private part2Topic: string | null = null;
   @state() private part2TopicForPart3: string | null = null; // Persists topic for Part 3
   @state() private part2PreparationTimeLeft = 60;
+  @state() private part2SpeakingTimeLeft = 120;
   private part2TimerInterval: number | null = null;
+
+  // Intro Modal State
+  @state() private isIntroModalOpen = false;
+  @state()
+  private introModalContent: {
+    title: string;
+    instructions: string[];
+    checkboxLabel: string;
+  } | null = null;
+  @state() private isIntroConfirmed = false;
 
   private client: GoogleGenAI;
   private session: Session;
@@ -315,7 +332,7 @@ export class GdmLiveAudio extends LitElement {
       background-color: #282828;
       border-radius: 8px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-      width: 200px;
+      width: 220px;
       overflow: hidden;
       display: none;
       flex-direction: column;
@@ -643,6 +660,62 @@ export class GdmLiveAudio extends LitElement {
       width: 90%;
     }
 
+    .modal-content.intro-modal {
+      text-align: left;
+      max-width: 500px;
+    }
+
+    .intro-modal h2 {
+      text-align: center;
+      border-bottom: 1px solid #444;
+      padding-bottom: 15px;
+      margin-bottom: 20px;
+    }
+
+    .intro-modal ul {
+      list-style-type: none;
+      padding: 0;
+      margin: 0 0 25px 0;
+    }
+
+    .intro-modal li {
+      padding: 10px 0;
+      border-bottom: 1px solid #333;
+      line-height: 1.5;
+    }
+
+    .intro-modal li:last-child {
+      border-bottom: none;
+    }
+
+    .intro-modal li::before {
+      content: '✓';
+      color: #4285f4;
+      font-weight: bold;
+      display: inline-block;
+      width: 1em;
+      margin-left: -1em;
+    }
+
+    .confirmation-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 25px;
+      justify-content: center;
+    }
+
+    .confirmation-container input[type='checkbox'] {
+      width: 18px;
+      height: 18px;
+      accent-color: #4285f4;
+    }
+
+    .confirmation-container label {
+      font-size: 0.95rem;
+      color: #ddd;
+    }
+
     .modal-content h2 {
       margin-top: 0;
       color: #e0e0e0;
@@ -665,10 +738,17 @@ export class GdmLiveAudio extends LitElement {
       border-radius: 8px;
       cursor: pointer;
       transition: background-color 0.3s;
+      width: 100%;
     }
 
-    .modal-button:hover {
+    .modal-button:hover:not(:disabled) {
       background-color: #357ae8;
+    }
+
+    .modal-button:disabled {
+      background-color: #444;
+      color: #888;
+      cursor: not-allowed;
     }
 
     /* Tablet and Desktop Styles */
@@ -732,10 +812,7 @@ export class GdmLiveAudio extends LitElement {
         if (!this.client) {
           this.initClient();
         }
-        // Chain these to avoid race conditions
-        this.fetchUserProfile().then(() => {
-          this.checkPendingPurchase();
-        });
+        this.fetchUserProfile();
         this.fetchHistory();
         this.currentView = 'app';
       }
@@ -854,7 +931,7 @@ export class GdmLiveAudio extends LitElement {
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const prompt = `Based on the following monologue from a candidate, please act as an IELTS examiner and provide 3-5 sentences of feedback on how they can improve their English speaking skills for the IELTS test. Focus on areas like fluency, lexical resource, grammatical range and accuracy, and pronunciation. Here is the transcript: "${candidateTranscripts}"`;
+          const prompt = `Analyze the following IELTS candidate's speech. Provide one sentence of feedback that includes two relevant, advanced vocabulary words the candidate could use to improve their answer. Enclose the vocabulary words in double asterisks for emphasis (e.g., **word**). The feedback must be a single, concise sentence directly related to their speech. Here is the transcript: "${candidateTranscripts}"`;
 
           const response = await this.client.models.generateContent({
             model: 'gemini-2.5-flash',
@@ -1051,7 +1128,12 @@ export class GdmLiveAudio extends LitElement {
           speechConfig: {
             voiceConfig: {prebuiltVoiceConfig: {voiceName: 'Orus'}},
           },
-          inputAudioTranscription: {languageCodes: ['en-US'], model: 'chirp'},
+          // FIX: Moved `endOfSpeechTimeoutMillis` into `inputAudioTranscription` as it is an input-related property.
+          inputAudioTranscription: {
+            languageCodes: ['en-US'],
+            model: 'chirp',
+            endOfSpeechTimeoutMillis: 1500,
+          },
           outputAudioTranscription: {languageCodes: ['en-US']},
           systemInstruction,
         },
@@ -1189,27 +1271,76 @@ export class GdmLiveAudio extends LitElement {
     this.part2CueCard = null;
     this.part2Topic = null;
     this.part2State = 'idle';
+    this.part2PreparationTimeLeft = 60;
+    this.part2SpeakingTimeLeft = 120;
 
-    if (part === 'part1') {
+    switch (part) {
+      case 'part1':
+        this.introModalContent = {
+          title: 'IELTS Speaking: Part 1',
+          instructions: [
+            'You will be asked general questions about yourself and familiar topics.',
+            'This part lasts for 4-5 minutes.',
+            'Ensure you are in a quiet place with a working microphone.',
+          ],
+          checkboxLabel: 'I understand and am ready to begin.',
+        };
+        break;
+      case 'part2':
+        this.introModalContent = {
+          title: 'IELTS Speaking: Part 2',
+          instructions: [
+            'You will be given a cue card with a topic.',
+            'You will have 1 minute to prepare and take notes.',
+            'You must speak on the topic for 1-2 minutes.',
+            'Please have a pen and paper ready for note-taking.',
+          ],
+          checkboxLabel: 'I have my pen and paper, and I am ready.',
+        };
+        break;
+      case 'part3':
+        if (!this.part2TopicForPart3) {
+          this.transcripts = [
+            {
+              speaker: 'Examiner',
+              text: 'Please complete Part 2 before starting Part 3.',
+            },
+          ];
+          return;
+        }
+        this.introModalContent = {
+          title: 'IELTS Speaking: Part 3',
+          instructions: [
+            'You will be asked abstract questions related to the topic from Part 2.',
+            'This is a two-way discussion with the examiner.',
+            'This part lasts for 4-5 minutes.',
+          ],
+          checkboxLabel: 'I understand and am ready to continue.',
+        };
+        break;
+    }
+
+    this.isIntroConfirmed = false;
+    this.isIntroModalOpen = true;
+  }
+
+  private async handleStartPart() {
+    this.isIntroModalOpen = false;
+    if (!this.currentPart) return;
+
+    if (this.currentPart === 'part1') {
       await this.startRecording(PART1_INSTRUCTION);
-    } else if (part === 'part2') {
+    } else if (this.currentPart === 'part2') {
       this.part2State = 'generating';
       this.transcripts = [
         {speaker: 'Examiner', text: 'Generating your Part 2 cue card...'},
       ];
       await this.generateCueCard();
-    } else if (part === 'part3') {
+    } else if (this.currentPart === 'part3') {
       if (this.part2TopicForPart3) {
         await this.startRecording(
           PART3_INSTRUCTION_TEMPLATE(this.part2TopicForPart3),
         );
-      } else {
-        this.transcripts = [
-          {
-            speaker: 'Examiner',
-            text: 'Please complete Part 2 before starting Part 3.',
-          },
-        ];
       }
     }
   }
@@ -1261,9 +1392,28 @@ export class GdmLiveAudio extends LitElement {
       if (this.part2PreparationTimeLeft <= 0) {
         clearInterval(this.part2TimerInterval!);
         this.part2TimerInterval = null;
-        this.part2State = 'speaking';
-        // Automatically start the recording for Part 2, with no audio response
-        this.startRecording(PART2_INSTRUCTION, []);
+        this.startPart2SpeakingSession();
+      }
+    }, 1000);
+  }
+
+  private async startPart2SpeakingSession() {
+    this.part2State = 'speaking';
+    this.part2SpeakingTimeLeft = 120;
+
+    // By requesting an audio modality, we ensure that the user's speech is
+    // transcribed. The system prompt instructs the AI not to speak.
+    await this.startRecording(PART2_INSTRUCTION, [
+      Modality.AUDIO,
+      Modality.TEXT,
+    ]);
+
+    this.part2TimerInterval = window.setInterval(() => {
+      this.part2SpeakingTimeLeft -= 1;
+      if (this.part2SpeakingTimeLeft <= 0) {
+        clearInterval(this.part2TimerInterval!);
+        this.part2TimerInterval = null;
+        this.stopCurrentSession(); // Automatically stop the session
       }
     }, 1000);
   }
@@ -1345,51 +1495,30 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
-  private async handlePurchase(minutes: number, planName: string) {
+  private async handleSubscription(planId: string) {
     if (!this.supabaseSession) {
-      localStorage.setItem(
-        'pending_purchase',
-        JSON.stringify({minutes, planName}),
-      );
+      // If user is not signed in, prompt them to sign in first.
+      // A more robust solution would store the desired plan and redirect
+      // after sign-in, but for simplicity, the user can click again.
       await this.signInWithGoogle();
       return;
     }
 
-    const seconds_to_add = minutes * 60;
+    // In a real application, you would generate a unique checkout session on your
+    // backend and include the user's ID. For this demo, we use static placeholder
+    // links. After purchase, Stripe webhooks would update the user's credits
+    // and subscription status in your Supabase database.
+    const paymentLinks: Record<string, string> = {
+      starter: 'https://buy.stripe.com/test_5kA8A75Ie5pS1i0dQQ',
+      pro: 'https://buy.stripe.com/test_7sI1nZg4Q5pS0e4cMN',
+    };
 
-    const {data: newTotal, error} = await supabase.rpc('add_credits', {
-      seconds_to_add,
-    });
-
-    if (error) {
-      console.error('Error processing purchase:', error);
-      alert('There was an error processing your purchase. Please try again.');
-      return;
-    }
-
-    this.userCredits = newTotal;
-
-    alert(
-      `Thank you for purchasing the ${planName} plan! ${minutes} minutes of credit have been added. Your new balance is ${Math.floor(
-        newTotal / 60,
-      )} minutes.`,
-    );
-
-    if (this.currentView === 'pricing') {
-      this.currentView = 'app';
-    }
-  }
-
-  private async checkPendingPurchase() {
-    const pendingPurchaseJSON = localStorage.getItem('pending_purchase');
-    if (pendingPurchaseJSON) {
-      localStorage.removeItem('pending_purchase');
-      try {
-        const {minutes, planName} = JSON.parse(pendingPurchaseJSON);
-        await this.handlePurchase(minutes, planName);
-      } catch (e) {
-        console.error('Error processing pending purchase:', e);
-      }
+    const url = paymentLinks[planId];
+    if (url) {
+      window.location.href = url;
+    } else {
+      console.error('Invalid plan ID:', planId);
+      alert('Could not process the selected plan. Please try again.');
     }
   }
 
@@ -1398,17 +1527,62 @@ export class GdmLiveAudio extends LitElement {
     this.currentView = 'pricing';
   }
 
+  private async handleVisualizerClick() {
+    if (this.isRecording) {
+      await this.stopRecording();
+    } else if (this.currentPart) {
+      // If a part is selected but not running, start it.
+      // Re-calling handlePartSelect is the correct way to trigger
+      // the start/restart logic for that part.
+      await this.handlePartSelect(this.currentPart);
+    }
+    // If no part is selected, do nothing. The user must use the part buttons.
+  }
+
   private renderOutOfCreditsModal() {
     return html`
       <div class="modal-overlay">
         <div class="modal-content">
           <h2>Out of Credits</h2>
           <p>
-            You have run out of practice credits. Please upgrade your plan to
-            continue.
+            You have used all your practice credits for this month. Please
+            upgrade your plan or wait for your credits to reset next month.
           </p>
           <button class="modal-button" @click=${this.redirectToPricing}>
-            View Pricing
+            View Plans
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderIntroModal() {
+    if (!this.isIntroModalOpen || !this.introModalContent) return '';
+    return html`
+      <div class="modal-overlay">
+        <div class="modal-content intro-modal">
+          <h2>${this.introModalContent.title}</h2>
+          <ul>
+            ${this.introModalContent.instructions.map(
+              (i) => html`<li>${i}</li>`,
+            )}
+          </ul>
+          <div class="confirmation-container">
+            <input
+              type="checkbox"
+              id="intro-confirm"
+              .checked=${this.isIntroConfirmed}
+              @change=${(e: Event) =>
+                (this.isIntroConfirmed = (e.target as HTMLInputElement).checked)} />
+            <label for="intro-confirm"
+              >${this.introModalContent.checkboxLabel}</label
+            >
+          </div>
+          <button
+            class="modal-button"
+            ?disabled=${!this.isIntroConfirmed}
+            @click=${this.handleStartPart}>
+            Start
           </button>
         </div>
       </div>
@@ -1419,11 +1593,10 @@ export class GdmLiveAudio extends LitElement {
     title: string,
     price: string,
     features: string[],
-    minutes: number,
+    planId: 'free' | 'starter' | 'pro',
     highlight: boolean,
     discount?: string,
   ) {
-    const isFree = minutes === 0;
     return html`
       <div class="pricing-card ${highlight ? 'highlight' : ''}">
         ${discount
@@ -1441,10 +1614,10 @@ export class GdmLiveAudio extends LitElement {
         <button
           class="pricing-button"
           @click=${() =>
-            isFree
+            planId === 'free'
               ? this.signInWithGoogle()
-              : this.handlePurchase(minutes, title)}>
-          ${isFree ? 'Get Started' : 'Choose Plan'}
+              : this.handleSubscription(planId)}>
+          ${planId === 'free' ? 'Get Started' : 'Choose Plan'}
         </button>
       </div>
     `;
@@ -1476,35 +1649,35 @@ export class GdmLiveAudio extends LitElement {
             </p>
           </section>
           <section class="pricing-section">
-            <h2>Simple, Credit-Based Pricing</h2>
+            <h2>Simple, Monthly Subscriptions</h2>
             <div class="pricing-container">
               ${this.renderPricingCard(
                 'Free',
                 '$0',
                 ['5 Minutes of Practice', 'Standard AI Examiner', 'Basic Feedback'],
-                0,
+                'free',
                 false,
               )}
               ${this.renderPricingCard(
                 'Starter',
-                '$9',
+                '$9 / mo',
                 [
-                  '100 Minutes of Practice',
-                  'Advanced AI Examiner',
+                  '100 Minutes / Month',
+                  'Credits reset monthly',
                   'Detailed Feedback & History',
                 ],
-                100,
+                'starter',
                 false,
               )}
               ${this.renderPricingCard(
                 'Pro',
-                '$19',
+                '$19 / mo',
                 [
-                  '300 Minutes of Practice',
-                  'Advanced AI Examiner',
+                  '300 Minutes / Month',
+                  'Credits reset monthly',
                   'Detailed Feedback & History',
                 ],
-                300,
+                'pro',
                 true,
                 'SAVE 30%',
               )}
@@ -1532,24 +1705,24 @@ export class GdmLiveAudio extends LitElement {
             <div class="pricing-container">
               ${this.renderPricingCard(
                 'Starter',
-                '$9',
+                '$9 / mo',
                 [
-                  '100 Minutes of Practice',
-                  'Advanced AI Examiner',
+                  '100 Minutes / Month',
+                  'Credits reset monthly',
                   'Detailed Feedback & History',
                 ],
-                100,
+                'starter',
                 false,
               )}
               ${this.renderPricingCard(
                 'Pro',
-                '$19',
+                '$19 / mo',
                 [
-                  '300 Minutes of Practice',
-                  'Advanced AI Examiner',
+                  '300 Minutes / Month',
+                  'Credits reset monthly',
                   'Detailed Feedback & History',
                 ],
-                300,
+                'pro',
                 true,
                 'SAVE 30%',
               )}
@@ -1611,19 +1784,45 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private renderIeltsContent() {
+    const isPart2Active =
+      this.currentPart === 'part2' && this.part2State === 'preparing';
+
     return html`
-      ${this.currentPart === 'part2' && this.part2CueCard
+      ${this.currentPart === 'part2' &&
+      (this.part2State === 'preparing' || this.part2State === 'speaking')
         ? html`
             <div class="cue-card-container">
-              <div class="cue-card">
-                <h4>IELTS Speaking Part 2</h4>
-                <p .innerHTML=${this.part2CueCard.replace(/\n/g, '<br>')}></p>
-              </div>
-              ${this.part2State === 'preparing'
-                ? html`<div class="timer">
-                    Prepare: ${this.part2PreparationTimeLeft}s
-                  </div>`
+              ${this.part2State === 'preparing' && this.part2CueCard
+                ? html`
+                    <div class="cue-card">
+                      <h4>IELTS Speaking Part 2</h4>
+                      <p
+                        .innerHTML=${this.part2CueCard.replace(
+                          /\n/g,
+                          '<br>',
+                        )}></p>
+                    </div>
+                  `
                 : ''}
+              ${this.part2State === 'speaking' && !this.part2CueCard
+                ? ''
+                : html`
+                    ${this.part2State === 'preparing'
+                      ? html`<div class="timer">
+                          Prepare: ${this.part2PreparationTimeLeft}s
+                        </div>`
+                      : ''}
+                    ${this.part2State === 'speaking'
+                      ? html`<div class="timer">
+                          Speak:
+                          ${Math.floor(this.part2SpeakingTimeLeft / 60)}:${(
+                              this.part2SpeakingTimeLeft % 60
+                            )
+                              .toString()
+                              .padStart(2, '0')}
+                        </div>`
+                      : ''}
+                  `}
             </div>
           `
         : ''}
@@ -1642,6 +1841,8 @@ export class GdmLiveAudio extends LitElement {
     return html`
       <div class="app-container">
         ${this.isOutOfCreditsModalOpen ? this.renderOutOfCreditsModal() : ''}
+        ${this.isIntroModalOpen ? this.renderIntroModal() : ''}
+
         <div class="profile-menu-container">
           <button
             class="profile-button"
@@ -1659,13 +1860,20 @@ export class GdmLiveAudio extends LitElement {
           </button>
           <div class="profile-dropdown ${this.isProfileMenuOpen ? 'open' : ''}">
             <div class="dropdown-item-static">
-              Time Left:
+              Monthly Time Left:
               ${this.userCredits !== null
                 ? `${Math.floor(this.userCredits / 60)} min`
                 : '...'}
             </div>
             <button class="dropdown-item" @click=${this.openHistoryPanel}>
               History
+            </button>
+            <button
+              class="dropdown-item"
+              @click=${() =>
+                (window.location.href =
+                  'https://billing.stripe.com/p/login/test_7sI5nRb3C2hGeD6eUU')}>
+              Manage Subscription
             </button>
             <button class="dropdown-item" @click=${this.signOut}>Logout</button>
           </div>
@@ -1675,6 +1883,7 @@ export class GdmLiveAudio extends LitElement {
 
         <div class="visualizer-container">
           <gdm-audio-visualizer
+            @visualizer-click=${this.handleVisualizerClick}
             .inputNode=${this.inputNode}
             .outputNode=${this.outputNode}
             .isRecording=${this.isRecording}></gdm-audio-visualizer>

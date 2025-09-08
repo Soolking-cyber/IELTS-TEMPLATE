@@ -45,10 +45,17 @@ export class GdmAudioVisualizer extends LitElement {
     this.canvas.width = 400; // Use higher resolution for crisp drawing
     this.canvas.height = 400;
 
+    this.addEventListener('click', this.handleClick);
+
     if (this.inputNode && this.outputNode) {
       this.setupAnalysers();
       this.draw();
     }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.removeEventListener('click', this.handleClick);
   }
 
   willUpdate(changedProperties: Map<string, unknown>) {
@@ -64,6 +71,12 @@ export class GdmAudioVisualizer extends LitElement {
         }
       }
     }
+  }
+
+  private handleClick() {
+    this.dispatchEvent(
+      new CustomEvent('visualizer-click', {bubbles: true, composed: true}),
+    );
   }
 
   private setupAnalysers() {
