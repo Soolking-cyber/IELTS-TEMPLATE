@@ -431,25 +431,37 @@ export class GdmLiveAudio extends LitElement {
       background-color: #121212;
       margin: 0 10px 10px 10px;
       border-radius: 0 0 12px 12px;
-      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #333;
+      overflow: hidden; /* Prevent parent from scrolling */
+    }
+
+    .cue-card-sticky-wrapper {
+      padding: 20px 20px 0 20px;
+      background-color: #121212;
+    }
+
+    .transcript-scroll-area {
+      flex: 1;
       overflow-y: auto;
+      padding: 20px;
       display: flex;
       flex-direction: column;
       gap: 12px;
-      border: 1px solid #333;
       scrollbar-width: thin;
       scrollbar-color: #555 #121212;
     }
 
-    .transcripts-container::-webkit-scrollbar {
+    .transcript-scroll-area::-webkit-scrollbar {
       width: 8px;
     }
 
-    .transcripts-container::-webkit-scrollbar-track {
+    .transcript-scroll-area::-webkit-scrollbar-track {
       background: #121212;
     }
 
-    .transcripts-container::-webkit-scrollbar-thumb {
+    .transcript-scroll-area::-webkit-scrollbar-thumb {
       background-color: #555;
       border-radius: 4px;
     }
@@ -486,13 +498,12 @@ export class GdmLiveAudio extends LitElement {
 
     .cue-card-container {
       padding: 15px;
-      margin-bottom: 15px;
       background-color: #242424;
       border: 1px solid #444;
       border-radius: 8px;
-      align-self: center;
       max-width: 90%;
       width: 500px;
+      margin: 0 auto;
     }
 
     .cue-card h4 {
@@ -523,7 +534,7 @@ export class GdmLiveAudio extends LitElement {
 
     .cue-card-points li {
       position: relative;
-      padding-left: 1.5em; /* Space for the bullet */
+      padding-left: 0.8em; /* Space for the bullet, was 1.5em */
       margin-bottom: 0.8em;
       line-height: 1.5;
     }
@@ -853,7 +864,9 @@ export class GdmLiveAudio extends LitElement {
 
   updated(changedProperties: PropertyValues) {
     if (changedProperties.has('transcripts')) {
-      const container = this.shadowRoot?.querySelector('.transcripts-container');
+      const container = this.shadowRoot?.querySelector(
+        '.transcript-scroll-area',
+      );
       if (container) {
         container.scrollTop = container.scrollHeight;
       }
@@ -1134,7 +1147,10 @@ export class GdmLiveAudio extends LitElement {
             const audio =
               message.serverContent?.modelTurn?.parts[0]?.inlineData;
 
-            if (audio) {
+            if (
+              audio &&
+              !(this.currentPart === 'part2' && this.part2State === 'speaking')
+            ) {
               this.nextStartTime = Math.max(
                 this.nextStartTime,
                 this.outputAudioContext.currentTime,
@@ -1958,58 +1974,70 @@ export class GdmLiveAudio extends LitElement {
     `;
   }
 
-  private renderIeltsContent() {
+  private renderPart2CueCard() {
     return html`
-      ${this.currentPart === 'part2' &&
-      (this.part2State === 'preparing' || this.part2State === 'speaking')
-        ? html`
-            <div class="cue-card-container">
-              ${this.part2CueCard
-                ? html`
-                    <div class="cue-card">
-                      <h4>IELTS Speaking Part 2</h4>
-                      <p class="cue-card-description">
-                        ${this.part2CueCard.description}
-                      </p>
-                      <ul class="cue-card-points">
-                        ${this.part2CueCard.points.map(
-                          (point) => html`<li>${point}</li>`,
-                        )}
-                      </ul>
-                    </div>
-                  `
+      <div class="cue-card-container">
+        ${this.part2CueCard
+          ? html`
+              <div class="cue-card">
+                <h4>IELTS Speaking Part 2</h4>
+                <p class="cue-card-description">
+                  ${this.part2CueCard.description}
+                </p>
+                <ul class="cue-card-points">
+                  ${this.part2CueCard.points.map(
+                    (point) => html`<li>${point}</li>`,
+                  )}
+                </ul>
+              </div>
+            `
+          : ''}
+        ${this.part2CueCard
+          ? html`
+              ${this.part2State === 'preparing'
+                ? html`<div class="timer">
+                    Prepare: ${this.part2PreparationTimeLeft}s
+                  </div>`
                 : ''}
-              ${this.part2CueCard
-                ? html`
-                    ${this.part2State === 'preparing'
-                      ? html`<div class="timer">
-                          Prepare: ${this.part2PreparationTimeLeft}s
-                        </div>`
-                      : ''}
-                    ${this.part2State === 'speaking'
-                      ? html`<div class="timer">
-                          Speak:
-                          ${Math.floor(this.part2SpeakingTimeLeft / 60)}:${(
-                              this.part2SpeakingTimeLeft % 60
-                            )
-                              .toString()
-                              .padStart(2, '0')}
-                        </div>`
-                      : ''}
-                  `
+              ${this.part2State === 'speaking'
+                ? html`<div class="timer">
+                    Speak:
+                    ${Math.floor(this.part2SpeakingTimeLeft / 60)}:${(
+                        this.part2SpeakingTimeLeft % 60
+                      )
+                        .toString()
+                        .padStart(2, '0')}
+                  </div>`
                 : ''}
-            </div>
-          `
-        : ''}
-      ${this.transcripts.map(
-        (t) => html`
-          <div class="transcript-line ${t.speaker.toLowerCase()}">
-            <strong>${t.speaker}</strong>
-            <div>${t.text}</div>
-          </div>
-        `,
-      )}
+            `
+          : ''}
+      </div>
     `;
+  }
+
+  private renderIeltsContent() {
+    const transcriptList = html`${this.transcripts.map(
+      (t) => html`
+        <div class="transcript-line ${t.speaker.toLowerCase()}">
+          <strong>${t.speaker}</strong>
+          <div>${t.text}</div>
+        </div>
+      `,
+    )}`;
+
+    if (
+      this.currentPart === 'part2' &&
+      (this.part2State === 'preparing' || this.part2State === 'speaking')
+    ) {
+      return html`
+        <div class="cue-card-sticky-wrapper">
+          ${this.renderPart2CueCard()}
+        </div>
+        <div class="transcript-scroll-area">${transcriptList}</div>
+      `;
+    }
+
+    return html`<div class="transcript-scroll-area">${transcriptList}</div>`;
   }
 
   private renderApp() {
