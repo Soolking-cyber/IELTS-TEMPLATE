@@ -54,6 +54,8 @@ export class GdmLiveAudio extends LitElement {
 
   // View management
   @state() private currentView: 'app' | 'pricing' = 'app';
+  @state() private isTermsModalOpen = false;
+  @state() private isPrivacyModalOpen = false;
 
   // Credit system state
   @state() private userCredits: number | null = null; // Now in seconds
@@ -105,8 +107,7 @@ export class GdmLiveAudio extends LitElement {
 
   static styles = css`
     :host {
-      display: flex;
-      flex-direction: column;
+      display: block; /* Changed from flex to isolate modal layout */
       width: 100vw;
       height: 100vh;
       background-color: #000;
@@ -115,10 +116,17 @@ export class GdmLiveAudio extends LitElement {
       font-family: 'Google Sans', sans-serif, system-ui;
     }
 
+    .page-wrapper {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
     .landing-page {
       display: flex;
       flex-direction: column;
-      height: 100vh;
+      flex: 1;
+      min-height: 0;
       overflow-y: auto;
       text-align: center;
     }
@@ -374,7 +382,8 @@ export class GdmLiveAudio extends LitElement {
       display: flex;
       flex-direction: column; /* Vertical layout for all screens */
       width: 100%;
-      height: 100%;
+      flex: 1;
+      min-height: 0;
       position: relative;
     }
 
@@ -418,8 +427,8 @@ export class GdmLiveAudio extends LitElement {
     }
 
     .visualizer-container {
-      flex: 1;
-      min-height: 250px;
+      height: 280px; /* A more controlled, smaller height */
+      flex-shrink: 0; /* Prevent it from shrinking */
       display: flex;
       align-items: center;
       justify-content: center;
@@ -809,6 +818,109 @@ export class GdmLiveAudio extends LitElement {
       background-color: #5f5f5f;
     }
 
+    footer {
+      padding: 1rem;
+      background-color: #0a0a0a;
+      border-top: 1px solid #2a2a2a;
+      color: #888;
+      font-size: 0.8rem;
+      flex-shrink: 0;
+    }
+    .footer-content {
+      max-width: 1000px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 0.5rem 1.5rem;
+    }
+    .footer-content p {
+      margin: 0;
+    }
+    .footer-content nav {
+      display: flex;
+      gap: 1.5rem;
+    }
+    .footer-content a {
+      color: #aaa;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .footer-content a:hover {
+      text-decoration: underline;
+    }
+
+    .legal-modal-content {
+      background-color: #282828;
+      padding: 0;
+      border-radius: 12px;
+      text-align: left;
+      border: 1px solid #444;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5);
+      max-width: 800px;
+      width: 90%;
+      display: flex;
+      flex-direction: column;
+      max-height: 80vh;
+    }
+
+    .legal-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 25px;
+      border-bottom: 1px solid #444;
+      flex-shrink: 0;
+    }
+
+    .legal-modal-header h2 {
+      margin: 0;
+      font-size: 1.3rem;
+    }
+
+    .legal-modal-header .close-button {
+      background: none;
+      border: none;
+      color: white;
+      font-size: 2rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 5px;
+    }
+
+    .legal-modal-body {
+      padding: 25px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #555 #282828;
+    }
+
+    .legal-modal-body::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .legal-modal-body::-webkit-scrollbar-track {
+      background: #282828;
+    }
+
+    .legal-modal-body::-webkit-scrollbar-thumb {
+      background-color: #555;
+      border-radius: 4px;
+    }
+
+    .legal-modal-body h3 {
+      font-size: 1.5rem;
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+      color: #e0e0e0;
+    }
+    .legal-modal-body p {
+      color: #bbb;
+      line-height: 1.7;
+      margin-bottom: 1rem;
+    }
+
     /* Tablet and Desktop Styles */
     @media (min-width: 768px) {
       .part-selector {
@@ -826,6 +938,11 @@ export class GdmLiveAudio extends LitElement {
 
       .history-panel {
         width: 400px;
+      }
+
+      .footer-content {
+        justify-content: space-between;
+        flex-wrap: nowrap;
       }
     }
   `;
@@ -1705,6 +1822,20 @@ export class GdmLiveAudio extends LitElement {
     // If no part is selected, do nothing. The user must use the part buttons.
   }
 
+  private navigateToLegalPage(e: Event, view: 'terms' | 'privacy') {
+    e.preventDefault();
+    if (view === 'terms') {
+      this.isTermsModalOpen = true;
+    } else if (view === 'privacy') {
+      this.isPrivacyModalOpen = true;
+    }
+  }
+
+  private closeLegalModals() {
+    this.isTermsModalOpen = false;
+    this.isPrivacyModalOpen = false;
+  }
+
   private renderOutOfCreditsModal() {
     return html`
       <div class="modal-overlay">
@@ -2123,13 +2254,180 @@ export class GdmLiveAudio extends LitElement {
     `;
   }
 
+  private getTermsContent() {
+    return html`
+      <p><strong>Last Updated: ${new Date().toLocaleDateString()}</strong></p>
+      <p>
+        Welcome to AI IELTS Examiner. These terms and conditions outline the
+        rules and regulations for the use of our website and services, operated
+        by B1 Smart Solutions.
+      </p>
+      <h3>1. Acceptance of Terms</h3>
+      <p>
+        By accessing this website, we assume you accept these terms and
+        conditions. Do not continue to use AI IELTS Examiner if you do not agree
+        to all of the terms and conditions stated on this page.
+      </p>
+      <h3>2. License to Use</h3>
+      <p>
+        Unless otherwise stated, B1 Smart Solutions and/or its licensors own the
+        intellectual property rights for all material on AI IELTS Examiner. All
+        intellectual property rights are reserved. You may access this from AI
+        IELTS Examiner for your own personal use subjected to restrictions set
+        in these terms and conditions.
+      </p>
+      <h3>3. User Account</h3>
+      <p>
+        You are responsible for safeguarding your account and for any activities
+        or actions under your account. You agree not to disclose your password
+        to any third party. You must notify us immediately upon becoming aware
+        of any breach of security or unauthorized use of your account.
+      </p>
+      <h3>4. Service Usage and Credits</h3>
+      <p>
+        The service provides practice time measured in credits (seconds).
+        Purchased or provided credits are for your personal, non-commercial use
+        only and are subject to the terms of your selected plan. Credits are
+        non-refundable and non-transferable.
+      </p>
+      <h3>5. Termination</h3>
+      <p>
+        We may terminate or suspend your account immediately, without prior
+        notice or liability, for any reason whatsoever, including without
+        limitation if you breach the Terms. Upon termination, your right to use
+        the Service will immediately cease.
+      </p>
+      <h3>6. Disclaimer</h3>
+      <p>
+        The materials on AI IELTS Examiner's website are provided on an 'as is'
+        basis. B1 Smart Solutions makes no warranties, expressed or implied, and
+        hereby disclaims and negates all other warranties including, without
+        limitation, implied warranties or conditions of merchantability,
+        fitness for a particular purpose, or non-infringement of intellectual
+        property or other violation of rights.
+      </p>
+      <h3>7. Changes to Terms</h3>
+      <p>
+        We reserve the right, at our sole discretion, to modify or replace
+        these Terms at any time. We will try to provide at least 30 days' notice
+        prior to any new terms taking effect.
+      </p>
+    `;
+  }
+
+  private getPrivacyContent() {
+    return html`
+      <p><strong>Last Updated: ${new Date().toLocaleDateString()}</strong></p>
+      <p>
+        Your privacy is important to us. It is B1 Smart Solutions's policy to
+        respect your privacy regarding any information we may collect from you
+        across our website, AI IELTS Examiner.
+      </p>
+      <h3>1. Information We Collect</h3>
+      <p>
+        We only ask for personal information when we truly need it to provide a
+        service to you. This includes your email address for account creation
+        via Google OAuth. We collect audio data during your practice sessions to
+        provide real-time interaction and generate feedback.
+      </p>
+      <h3>2. How We Use Your Information</h3>
+      <p>
+        We use the information we collect to operate, maintain, and provide you
+        with the features and functionality of the service. Your audio is
+        processed in real-time by the Google Gemini API and is not stored
+        long-term on our servers. Transcripts of your sessions are saved to
+        provide you with a history and generate feedback.
+      </p>
+      <h3>3. Data Storage and Security</h3>
+      <p>
+        We are committed to protecting the security of your personal
+        information. We use Supabase for authentication and database services,
+        which employs industry-standard security measures. While we strive to
+        use commercially acceptable means to protect your Personal Information,
+        we cannot guarantee its absolute security.
+      </p>
+      <h3>4. Third-Party Services</h3>
+      <p>
+        Our service relies on third-party services, including Google (for Gemini
+        API and authentication) and Supabase (backend). We encourage you to
+        review their privacy policies. We do not share your personally
+        identifying information with third-parties, except to provide our
+        service or as required by law.
+      </p>
+      <h3>5. Your Rights</h3>
+      <p>
+        You are free to refuse our request for your personal information, with
+        the understanding that we may be unable to provide you with some of your
+        desired services. You can review and delete your session history and
+        associated data through your account.
+      </p>
+      <h3>6. Changes to This Policy</h3>
+      <p>
+        We may update our Privacy Policy from time to time. We will notify you
+        of any changes by posting the new Privacy Policy on this page.
+      </p>
+    `;
+  }
+
+  private renderLegalModal(title: string, content: any) {
+    return html`
+      <div class="modal-overlay" @click=${this.closeLegalModals}>
+        <div
+          class="legal-modal-content"
+          @click=${(e: Event) => e.stopPropagation()}>
+          <div class="legal-modal-header">
+            <h2>${title}</h2>
+            <button class="close-button" @click=${this.closeLegalModals}>
+              &times;
+            </button>
+          </div>
+          <div class="legal-modal-body">${content}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderFooter() {
+    return html`
+      <footer>
+        <div class="footer-content">
+          <p>
+            &copy; ${new Date().getFullYear()} B1 Smart Solutions. All rights
+            reserved.
+          </p>
+          <nav>
+            <a @click=${(e: Event) => this.navigateToLegalPage(e, 'terms')}
+              >Terms and Conditions</a
+            >
+            <a @click=${(e: Event) => this.navigateToLegalPage(e, 'privacy')}
+              >Privacy Policy</a
+            >
+          </nav>
+        </div>
+      </footer>
+    `;
+  }
+
   render() {
+    let content;
     if (!this.supabaseSession) {
-      return this.renderLogin();
+      content = this.renderLogin();
+    } else if (this.currentView === 'pricing') {
+      content = this.renderPricingPage();
+    } else {
+      content = this.renderApp();
     }
-    if (this.currentView === 'pricing') {
-      return this.renderPricingPage();
-    }
-    return this.renderApp();
+
+    return html`
+      <div class="page-wrapper">
+        ${content} ${this.renderFooter()}
+      </div>
+      ${this.isTermsModalOpen
+        ? this.renderLegalModal('Terms and Conditions', this.getTermsContent())
+        : ''}
+      ${this.isPrivacyModalOpen
+        ? this.renderLegalModal('Privacy Policy', this.getPrivacyContent())
+        : ''}
+    `;
   }
 }
